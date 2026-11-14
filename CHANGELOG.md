@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Quest headings keep their own quests.** On-map class and zone quests stay under their quest-log headings as distances change. (#177)
+
 - **Forever tracker sections follow Kaliel's Tracker.** They sit below its visible quest list and follow its font and collapse controls. Thanks to kowakowa93 for the contribution (#602).
 - **Tracker rows keep their full width and quest item art.** Long headers fit the section width, and scrolling leaves room for quest markers and item buttons. Thanks to xh43k for the report (#603).
 
