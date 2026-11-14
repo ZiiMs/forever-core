@@ -60,6 +60,9 @@ class ForeverClientTest(unittest.TestCase):
         self.runtime = self.state / "runtime"
         self.runtime.mkdir(mode=0o700)
         self.enterContext(mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.runtime)}))
+        # The host GPU is not part of a unit test; the driver-mismatch check has its own tests below.
+        self.real_nvidia_mismatch = fc.nvidia_mismatch
+        self.enterContext(mock.patch.object(fc, "nvidia_mismatch", return_value=None))
 
     def test_runtime_directory_fallback_is_existing_owned_private_directory(self):
         root = self.state / "users"
@@ -88,6 +91,50 @@ class ForeverClientTest(unittest.TestCase):
         with self.assertRaises(fc.ClientError):
             fc.runtime_dir({"XDG_RUNTIME_DIR": str(self.runtime)}, os.getuid())
         self.assertEqual(self.runtime.stat().st_mode & 0o777, 0o755)
+
+    def test_nvidia_mismatch_names_the_loaded_module_and_the_userspace(self):
+        module = self.state / "nvidia-version"
+        module.write_text("615.78.08\n")
+        run = mock.Mock(return_value=mock.Mock(returncode=0, stdout="620.70.06\n", stderr=""))
+        self.assertEqual(
+            self.real_nvidia_mismatch(module_path=module, run=run),
+            "the NVIDIA kernel module (615.78.08) does not match its userspace (620.70.06): reboot first",
+        )
+        run.return_value = mock.Mock(returncode=0, stdout="615.78.08\n", stderr="")
+        self.assertIsNone(self.real_nvidia_mismatch(module_path=module, run=run), "matching versions are not a failure")
+
+    def test_nvidia_mismatch_reads_nvidias_own_mismatch_line(self):
+        module = self.state / "nvidia-version"
+        module.write_text("615.78.08\n")
+        failed = mock.Mock(returncode=9, stdout="", stderr="Failed to initialize NVML: Driver/library version mismatch")
+        run = mock.Mock(return_value=failed)
+        with mock.patch.object(fc, "nvidia_userspace_version", return_value="620.70.06"):
+            self.assertEqual(
+                self.real_nvidia_mismatch(module_path=module, run=run),
+                "the NVIDIA kernel module (615.78.08) does not match its userspace (620.70.06): reboot first",
+            )
+
+    def test_a_gamescope_vulkan_failure_carries_the_driver_mismatch(self):
+        (self.state / "session.log").write_text("[gamescope] [Error] vulkan: vkCreateInstance failed (VkResult: -9)\n")
+        with mock.patch.object(
+            fc,
+            "nvidia_mismatch",
+            return_value="the NVIDIA kernel module (615.78.08) does not match its userspace (620.70.06): reboot first",
+        ):
+            hint = fc.gamescope_failure_hint()
+        self.assertIn("615.78.08", hint)
+        self.assertIn("620.70.06", hint)
+        self.assertIn("reboot first", hint)
+
+    def test_up_refuses_a_mismatched_nvidia_driver_before_starting_anything(self):
+        message = "the NVIDIA kernel module (615.78.08) does not match its userspace (620.70.06): reboot first"
+        with (
+            mock.patch.object(fc, "nvidia_mismatch", return_value=message),
+            mock.patch.object(fc.subprocess, "Popen") as spawn,
+            self.assertRaisesRegex(fc.ClientError, "reboot first"),
+        ):
+            fc.up(args())
+        spawn.assert_not_called()
 
     def test_shot_requires_recorded_runtime_directory(self):
         with self.assertRaisesRegex(fc.ClientError, "restart"):
@@ -171,6 +218,40 @@ class ForeverClientTest(unittest.TestCase):
         self.assertNotIn("WAYLAND_DISPLAY", env)
         self.assertIn(str(self.runtime), (self.state / "session.json").read_text())
         self.assertIn('"manual_launcher": true', (self.state / "session.json").read_text())
+
+    def test_an_interrupt_right_after_spawn_still_gives_teardown_the_session_token(self):
+        config = self.state / "env.json"
+        config.write_text('{"umu_run":"/faugus/umu-run","env":{"PROTONPATH":"/runner"}}')
+        client = self.state / "client"
+        (client / "Interface/AddOns").mkdir(parents=True)
+
+        class InterruptedGamescope:
+            @property
+            def pid(self):
+                raise KeyboardInterrupt
+
+        def spawn(*_args, **kwargs):
+            recorded = json.loads(fc.state_file().read_text())
+            self.assertEqual(recorded["token"], kwargs["env"]["FOREVER_CLIENT_SESSION"])
+            return InterruptedGamescope()
+
+        with (
+            mock.patch.object(fc, "CONFIG", config),
+            mock.patch.object(fc, "CLIENT", client),
+            mock.patch.object(fc, "prefix_users", return_value=[]),
+            mock.patch.object(fc.socket, "create_connection"),
+            mock.patch.object(fc.signal, "signal"),
+            mock.patch.object(fc.signal, "alarm"),
+            mock.patch.object(fc, "screenshots", return_value=set()),
+            mock.patch.object(fc.subprocess, "Popen", side_effect=spawn),
+            mock.patch.object(fc, "teardown") as teardown,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(fc.up(args()), 0)
+        state = teardown.call_args.args[3]
+        self.assertIsInstance(state, dict, "the session owns its token before its first child exists")
+        self.assertTrue(state.get("token"))
+        self.assertEqual(state.get("wine"), {"PROTONPATH": "/runner"})
 
     def test_wine_env_keeps_the_launch_and_drops_the_desktop(self):
         env = fc.wine_env(
@@ -603,6 +684,55 @@ class ForeverClientTest(unittest.TestCase):
                 fc.click({}, 20, 20, "1")
         self.assertEqual(x.call_count, 1)
 
+    def test_scroll_turns_the_wheel_at_a_freshly_seen_point(self):
+        with (
+            mock.patch.object(
+                fc, "mark", side_effect=lambda name: fc.time.time() + (0.1 if name == "last-shot" else 0)
+            ),
+            mock.patch.object(fc, "send") as send,
+        ):
+            fc.scroll({}, 960, 540, 3)
+            fc.scroll({}, 960, 540, -2)
+        self.assertEqual(
+            send.call_args_list,
+            [
+                mock.call({}, "mousemove", "960", "540", "click", "--repeat", "3", "--delay", fc.WHEEL_DELAY_MS, "4"),
+                mock.call({}, "mousemove", "960", "540", "click", "--repeat", "2", "--delay", fc.WHEEL_DELAY_MS, "5"),
+            ],
+        )
+
+    def test_scroll_needs_a_shot_and_a_non_zero_point(self):
+        with (
+            mock.patch.object(fc, "mark", return_value=0),
+            mock.patch.object(fc, "send") as send,
+            self.assertRaisesRegex(fc.ClientError, "take a `shot`"),
+        ):
+            fc.scroll({}, 960, 540, 1)
+        (self.state / "last-shot").touch()
+        (self.state / "last-input").touch()
+        with (
+            mock.patch.object(fc, "mark", side_effect=lambda name: 2 if name == "last-shot" else 1),
+            mock.patch.object(fc, "send") as send,
+            self.assertRaisesRegex(fc.ClientError, "non-zero"),
+        ):
+            fc.scroll({}, 960, 540, 0)
+        with (
+            mock.patch.object(fc, "mark", side_effect=lambda name: 2 if name == "last-shot" else 1),
+            mock.patch.object(fc, "send") as send,
+            self.assertRaisesRegex(fc.ClientError, "outside"),
+        ):
+            fc.scroll({}, 2000, 540, 1)
+        send.assert_not_called()
+
+    def test_scroll_cli_reaches_the_wheel_verb(self):
+        with (
+            mock.patch.object(fc, "load_state", return_value={"ready": 1.0}),
+            mock.patch.object(fc, "scroll") as scroll,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(fc.main(["scroll", "960", "540", "-4"]), 0)
+        scroll.assert_called_once_with({"ready": 1.0}, 960, 540, -4)
+
     def test_manual_launcher_click_refuses_when_game_process_has_started(self):
         (self.state / "last-input").touch()
         (self.state / "last-shot").touch()
@@ -661,6 +791,103 @@ class ForeverClientTest(unittest.TestCase):
             log_out.assert_not_called()
             fc.teardown(game, {}, None, {"display": ":1", "ready": 1.0})
             log_out.assert_called_once()
+
+    def test_a_dead_owners_gamescope_is_stopped_by_its_recorded_pid(self):
+        with (
+            mock.patch.object(fc, "gamescope_running", side_effect=[True, False]),
+            mock.patch.object(fc, "signal_pid", return_value=True) as signal_pid,
+            mock.patch.object(fc, "wait_for_pid", return_value=True) as wait,
+        ):
+            fc.stop_gamescope(1234, {"gamescope_start": 99})
+        signal_pid.assert_called_once_with(1234, 99, fc.signal.SIGTERM)
+        wait.assert_called_once_with(1234, 99, 20)
+
+    def test_down_tears_down_what_a_dead_owner_left_behind(self):
+        dead = dead_pid()
+        link = self.state / "!!ForeverHeadless"
+        link.symlink_to(self.state / "build")
+        state = {
+            "pid": dead,
+            "owner_start": 1,
+            "gamescope": 4321,
+            "gamescope_start": 7,
+            "token": "owned",
+            "wine": {"PROTONPATH": "/runner"},
+            "link": str(link),
+        }
+        fc.state_file().write_text(json.dumps(state))
+        with (
+            mock.patch.object(fc, "recover_links") as recover,
+            mock.patch.object(fc, "teardown") as teardown,
+        ):
+            self.assertEqual(fc.down(), 0)
+        recover.assert_called_once_with()
+        teardown.assert_called_once_with(4321, {"PROTONPATH": "/runner"}, link, state)
+
+    def test_down_never_signals_a_reused_owner_pid(self):
+        # The state file records the owner's start time, so a pid now owned by another process is already gone.
+        state = {"pid": os.getpid(), "owner_start": -1, "token": "owned", "gamescope": None}
+        fc.state_file().write_text(json.dumps(state))
+        with (
+            mock.patch.object(fc, "recover_links"),
+            mock.patch.object(fc, "teardown") as teardown,
+        ):
+            self.assertEqual(fc.down(), 0)
+        teardown.assert_called_once()
+
+    def test_down_pins_the_owner_identity_when_signalling(self):
+        state = {"pid": 1234, "owner_start": 99, "token": "owned", "gamescope": None}
+        fc.state_file().write_text(json.dumps(state))
+        with (
+            mock.patch.object(fc, "owner_alive", side_effect=[True, False]),
+            mock.patch.object(fc, "signal_pid", return_value=False) as send_signal,
+            mock.patch.object(fc.os, "kill") as kill,
+            mock.patch.object(fc, "recover_links"),
+            mock.patch.object(fc, "teardown"),
+            mock.patch.object(fc.time, "monotonic", side_effect=[0, 999]),
+        ):
+            self.assertEqual(fc.down(), 0)
+        send_signal.assert_called_once_with(1234, 99, fc.signal.SIGTERM)
+        kill.assert_not_called()
+
+    def test_signal_pid_refuses_missing_start_identity(self):
+        with mock.patch.object(fc.os, "pidfd_open") as open_pid:
+            self.assertFalse(fc.signal_pid(1234, None, fc.signal.SIGTERM))
+        open_pid.assert_not_called()
+
+    def test_down_retains_state_when_live_owner_cannot_be_signalled(self):
+        state = {"pid": 1234, "owner_start": 99, "token": "owned", "gamescope": None}
+        fc.state_file().write_text(json.dumps(state))
+        with (
+            mock.patch.object(fc, "owner_alive", return_value=True),
+            mock.patch.object(fc, "signal_pid", return_value=False),
+            mock.patch.object(fc, "teardown") as teardown,
+            self.assertRaisesRegex(fc.ClientError, "cannot safely signal"),
+        ):
+            fc.down()
+        teardown.assert_not_called()
+        self.assertTrue(fc.state_file().exists())
+
+    def test_down_never_cleans_a_dead_record_while_another_session_holds_lock(self):
+        fc.state_file().write_text(json.dumps({"pid": dead_pid(), "token": "old"}))
+        with open(self.state / "lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with (
+                mock.patch.object(fc, "recover_links"),
+                mock.patch.object(fc, "teardown") as teardown,
+                self.assertRaisesRegex(fc.ClientError, "holds the client"),
+            ):
+                fc.down()
+        teardown.assert_not_called()
+        self.assertTrue(fc.state_file().exists())
+
+    def test_stop_gamescope_retains_unverifiable_live_process(self):
+        with (
+            mock.patch.object(fc, "gamescope_running", return_value=True),
+            mock.patch.object(fc, "signal_pid", return_value=False),
+            self.assertRaisesRegex(fc.ClientError, "cannot safely stop gamescope"),
+        ):
+            fc.stop_gamescope(1234, {})
 
     def test_teardown_reaps_owned_children_that_respawn(self):
         game = mock.Mock(pid=1, **{"poll.return_value": None})
@@ -828,7 +1055,7 @@ class ForeverClientTest(unittest.TestCase):
             [mock.call(state), mock.call(state)],
             "the reload that runs the snippet, then the one that saves its result to disk",
         )
-        tool.write_snippet.assert_called_once_with(Path("probe.lua"), addons=client / "Interface/AddOns")
+        tool.write_snippet.assert_called_once_with(Path("probe.lua"), addons=client / "Interface/AddOns", capture=False)
         printed = out.getvalue()
         self.assertIn("wrote /checkout/!!DevSmokeInbox/Eval.lua from probe.lua (2 lines)", printed)
         self.assertIn("DevSmokeDB.eval: ok, ran 1763000000\na printed line\n42", printed)
@@ -883,18 +1110,22 @@ class ForeverClientTest(unittest.TestCase):
         reload.assert_not_called()
         self.assertIn("probe.lua:2: 'end' expected", err.getvalue())
 
-    def test_eval_clears_the_inbox_after_reading_its_own_result(self):
+    def test_eval_clears_the_inbox_before_the_reload_that_saves_its_result(self):
+        # The first reload runs the snippet; leaving the inbox for the second would run it again and report the second
+        # run's output, and its delayed flow screenshot could be mistaken for the saving reload's world load (#588).
         with mock.patch.object(fc, "CLIENT", self.state / "client"):
             self.saved_smoke('{\n\t["run"] = "run-1",\n\t["ran"] = 7,\n\t["ok"] = true,\n\t["out"] = { "shown" },\n}')
+            cleared = []
             with (
                 mock.patch.object(fc, "load_state", return_value={"ready": 1.0}),
                 mock.patch.object(fc, "devsmoke_eval", return_value=self.eval_tool()),
-                mock.patch.object(fc, "reload"),
+                mock.patch.object(fc, "reload", side_effect=lambda _state: cleared.append(clear.called)),
                 mock.patch.object(fc, "clear_eval_inbox") as clear,
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 self.assertEqual(fc.main(["eval", "probe.lua"]), 0)
-        clear.assert_called_once_with(quiet=True)
+        self.assertEqual(cleared, [False, True], "the inbox is gone before the saving reload")
+        clear.assert_called_once_with()
 
     def test_eval_clears_the_inbox_even_when_its_snippet_is_refused(self):
         class Refused(Exception):
@@ -1595,16 +1826,58 @@ class ProofHelpersTest(unittest.TestCase):
             fc.clear_eval_inbox()
         tool.clear_inbox.assert_called_once_with(addons=client / "Interface/AddOns")
 
-    def test_run_flow_sends_a_slash_command_without_an_eval(self):
+    def test_run_flow_runs_a_slash_command_through_devsmoke(self):
+        tool = mock.Mock()
+        tool.EvalError = Exception
+        tool.write_slash.return_value = {
+            "chunk": Path("/x/!!DevSmokeInbox/Eval.lua"),
+            "snippet": Path("/lf"),
+            "lines": 5,
+            "token": "run-slash",
+        }
         with (
-            mock.patch.object(fc, "slash") as slash,
-            mock.patch.object(fc, "devsmoke_eval") as tool,
-            mock.patch.object(fc.time, "sleep") as sleep,
+            mock.patch.object(fc, "CLIENT", self.state / "client"),
+            mock.patch.object(fc, "devsmoke_eval", return_value=tool),
+            mock.patch.object(fc, "allowed_command") as allowed,
+            mock.patch.object(fc, "screenshots", return_value=set()),
+            mock.patch.object(fc, "reload") as reload,
+            mock.patch.object(fc, "clear_eval_inbox") as clear,
+            mock.patch.object(fc, "wait_for_flow_ready") as ready,
+            contextlib.redirect_stdout(io.StringIO()) as out,
         ):
-            fc.run_flow({}, "/lf")
-        slash.assert_called_once_with({}, "/lf")
-        tool.assert_not_called()
-        sleep.assert_called_once_with(fc.SLASH_SETTLE_SECONDS)
+            self.assertEqual(fc.run_flow("state", "/lf"), "run-slash")
+        allowed.assert_called_once_with("/lf")
+        tool.write_slash.assert_called_once_with("/lf", addons=self.state / "client/Interface/AddOns", capture=True)
+        reload.assert_called_once_with("state")
+        clear.assert_called_once_with()
+        ready.assert_called_once_with(set(), "/lf", "run-slash")
+        self.assertIn("wrote /x/!!DevSmokeInbox/Eval.lua from /lf (5 lines)", out.getvalue())
+
+    def test_run_flow_reports_a_ready_failure_with_the_flows_own_token(self):
+        tool = mock.Mock()
+        tool.EvalError = Exception
+        tool.write_slash.return_value = {
+            "chunk": Path("/x/Eval.lua"),
+            "snippet": Path("/lf"),
+            "lines": 5,
+            "token": "run-slash",
+        }
+        timeout = fc.ClientError("the flow did not say it was ready")
+        precise = fc.ClientError("the flow /lf could not be captured: the flow's ready check failed: boom")
+        with (
+            mock.patch.object(fc, "CLIENT", self.state / "client"),
+            mock.patch.object(fc, "devsmoke_eval", return_value=tool),
+            mock.patch.object(fc, "allowed_command"),
+            mock.patch.object(fc, "screenshots", return_value=set()),
+            mock.patch.object(fc, "reload"),
+            mock.patch.object(fc, "clear_eval_inbox"),
+            mock.patch.object(fc, "wait_for_flow_ready", side_effect=timeout),
+            mock.patch.object(fc, "flow_capture_failure", return_value=precise) as failure,
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaisesRegex(fc.ClientError, "ready check failed: boom"),
+        ):
+            fc.run_flow("state", "/lf")
+        failure.assert_called_once_with("state", "/lf", "run-slash", timeout)
 
     def test_run_flow_writes_reloads_and_answers_the_run_token(self):
         tool = mock.Mock()
@@ -1629,9 +1902,11 @@ class ProofHelpersTest(unittest.TestCase):
             self.assertEqual(fc.run_flow("state", "notice.lua"), "run-1")
         reload.assert_called_once_with("state")
         clear.assert_called_once_with()
-        ready.assert_called_once_with(earlier, "notice.lua")
+        ready.assert_called_once_with(earlier, "notice.lua", "run-1")
         saved.assert_not_called()  # the result is read after the flow's screenshot
-        tool.write_snippet.assert_called_once_with(Path("notice.lua"), addons=self.state / "client/Interface/AddOns")
+        tool.write_snippet.assert_called_once_with(
+            Path("notice.lua"), addons=self.state / "client/Interface/AddOns", capture=True
+        )
         self.assertIn("wrote /x/!!DevSmokeInbox/Eval.lua from notice.lua (3 lines)", out.getvalue())
 
     def test_a_lua_flow_waits_for_the_world_and_its_own_screenshot(self):
@@ -1662,6 +1937,32 @@ class ProofHelpersTest(unittest.TestCase):
         ):
             fc.wait_for_flow_ready(set(), "notice.lua", timeout=5)
         self.assertEqual(clock.now, 5)
+
+    def test_wait_for_flow_ready_reports_the_recorded_failure_before_its_timeout(self):
+        world = self.state / "1-world.jpg"
+        world.write_bytes(b"world")
+        os.utime(world, (100, 100))
+        clock = FakeClock()
+        failed = {"run": "run-1", "ready": "failed", "readyErr": "the flow's ready check failed: boom"}
+        with (
+            mock.patch.object(fc, "screenshots", return_value={world}),
+            mock.patch.object(fc, "saved_eval", side_effect=[fc.ClientError("earlier run"), failed]),
+            mock.patch.object(fc.time, "monotonic", clock.monotonic),
+            mock.patch.object(fc.time, "sleep", clock.sleep),
+            self.assertRaisesRegex(fc.ClientError, "ready check failed: boom"),
+        ):
+            fc.wait_for_flow_ready(set(), "notice.lua", token="run-1", timeout=30)
+        self.assertEqual(clock.now, 1, "the recorded reason ends the wait at once")
+
+    def test_a_ready_failure_falls_back_to_a_saving_reload_only_when_unrecorded(self):
+        timeout = fc.ClientError("the flow did not say it was ready")
+        with (
+            mock.patch.object(fc, "flow_ready_failure", side_effect=[None, "the flow was not ready: boom"]),
+            mock.patch.object(fc, "reload") as reload,
+        ):
+            failure = fc.flow_capture_failure({}, "notice.lua", "run-1", timeout)
+        reload.assert_called_once_with({})
+        self.assertIn("the flow was not ready: boom", str(failure))
 
     def test_check_flow_eval_fails_on_the_error_its_own_snippet_raised(self):
         saved = {"run": "run-1", "ran": 7, "ok": False, "out": {1: "before"}, "err": "boom\nstack"}
@@ -1842,6 +2143,7 @@ class ProofTest(unittest.TestCase):
         self.addons = self.client / "Interface/AddOns"
         self.addons.mkdir(parents=True)
         self.enterContext(mock.patch.object(fc, "CLIENT", self.client))
+        self.enterContext(mock.patch.object(fc, "allowed_command"))
         self.workspace = self.state / "workspace"
         (self.workspace / "legacy-forever").mkdir(parents=True)
         self.enterContext(mock.patch.object(fc, "WORKSPACE", self.workspace))
@@ -1854,10 +2156,8 @@ class ProofTest(unittest.TestCase):
         self.commit = "a" * 40
         self.head = self.commit
         self.git_calls = []
-        self.slashes = []
         self.shot_paths = []
         self.busy = [None, None]
-        self.slash_error = None
         self.reload = mock.Mock()
         self.proof_digests = mock.Mock(return_value={"input_digest": "digest", "candidate": "candidate"})
         self.create_gist = mock.Mock(return_value="abc123")
@@ -1868,6 +2168,15 @@ class ProofTest(unittest.TestCase):
         self.compare = mock.Mock(return_value={"equivalent": True})
         self.build_dev = mock.Mock(return_value=self.build)
         self.up = mock.Mock(side_effect=self.start_session)
+        self.eval_tool = mock.Mock()
+        self.eval_tool.EvalError = Exception
+        self.eval_tool.write_slash.return_value = {
+            "chunk": Path("/x/Eval.lua"),
+            "snippet": Path("/lf"),
+            "lines": 5,
+            "token": "run-1",
+        }
+        self.saved_eval({"run": "run-1", "ran": 7, "ok": True, "out": {1: "shown"}})
 
     def start_session(self, options, after_ready=None):
         if after_ready:
@@ -1889,11 +2198,6 @@ class ProofTest(unittest.TestCase):
     def fake_git(self, root, *args):
         self.git_calls.append((root, *args))
         return self.head if root == self.checkout else self.commit
-
-    def fake_slash(self, _state, command):
-        if self.slash_error:
-            raise fc.ClientError(self.slash_error)
-        self.slashes.append(command)
 
     def fake_shot(self, _state, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1933,7 +2237,7 @@ class ProofTest(unittest.TestCase):
             mock.patch.object(fc, "up", up or self.up),
             mock.patch.object(fc, "reload", self.reload),
             mock.patch.object(fc, "wait_for_flow_ready", return_value=self.state / "flow.jpg"),
-            mock.patch.object(fc, "slash", side_effect=self.fake_slash),
+            mock.patch.object(fc, "devsmoke_eval", return_value=self.eval_tool),
             mock.patch.object(fc, "shot", side_effect=self.fake_shot),
             mock.patch.object(fc, "proof_digests", self.proof_digests),
             mock.patch.object(fc, "create_gist", self.create_gist),
@@ -1979,9 +2283,11 @@ class ProofTest(unittest.TestCase):
         self.assertEqual(proof["source_commit"], self.commit)
         self.assertEqual(proof["flows"], [{"name": "update notice", "steps": ["/lf"], "result": "pass"}])
         self.assertEqual(proof["images"], self.upload.return_value)
-        self.assertEqual(self.slashes, ["/lf"])
+        self.eval_tool.write_slash.assert_called_once_with("/lf", addons=self.addons, capture=True)
         self.assertEqual([path.name for path in self.shot_paths], ["1-update-notice.png"])
-        self.reload.assert_called_once()
+        self.assertEqual(
+            self.reload.call_count, 3, "the proof's own, the slash flow's, and the one that saves the eval to disk"
+        )
         self.client_build.assert_called_once_with(self.build)
         self.compare.assert_called_once_with(self.checkout, self.build)
         self.assertIn("wrote", printed)
@@ -2045,7 +2351,8 @@ class ProofTest(unittest.TestCase):
         def start(options, after_ready=None):
             return after_ready({"display": ":1"})
 
-        self.slash_error = "refused /lf"
+        self.eval_tool.EvalError = fc.ClientError
+        self.eval_tool.write_slash.side_effect = fc.ClientError("refused /lf")
         with self.assertRaisesRegex(fc.ClientError, "refused /lf"):
             self.run_proof(up=start)
         self.assertFalse((self.addons / "LegacyForever").exists())
@@ -2055,7 +2362,8 @@ class ProofTest(unittest.TestCase):
     def test_a_flow_that_fails_in_the_world_reports_its_own_error_not_a_busy_client(self):
         # In the world the session holds the client's lock itself, so client_in_use would name it as another's.
         self.busy = [None, "another session holds the client", "another session holds the client"]
-        self.slash_error = "refused /lf"
+        self.eval_tool.EvalError = fc.ClientError
+        self.eval_tool.write_slash.side_effect = fc.ClientError("refused /lf")
         with self.assertRaisesRegex(fc.ClientError, "refused /lf"):
             self.run_proof()
 
@@ -2066,8 +2374,8 @@ class ProofTest(unittest.TestCase):
         tool = mock.Mock()
         tool.EvalError = Exception
         tool.write_snippet.return_value = {"chunk": Path("/x/Eval.lua"), "snippet": lua, "lines": 1, "token": "run-1"}
-        with mock.patch.object(fc, "devsmoke_eval", return_value=tool):
-            code, printed, _err = self.run_proof(flow=[f"update notice={lua}"])
+        self.eval_tool = tool
+        code, printed, _err = self.run_proof(flow=[f"update notice={lua}"])
         self.assertEqual(code, 0)
         self.assertEqual([path.name for path in self.shot_paths], ["1-update-notice.png"])
         self.assertIn("DevSmokeDB.eval: ok, ran 7\nshown", printed)
@@ -2083,8 +2391,8 @@ class ProofTest(unittest.TestCase):
         tool = mock.Mock()
         tool.EvalError = Exception
         tool.write_snippet.return_value = {"chunk": Path("/x/Eval.lua"), "snippet": lua, "lines": 1, "token": "run-1"}
-        with mock.patch.object(fc, "devsmoke_eval", return_value=tool):
-            code, _printed, _err = self.run_proof(flow=[f"map={lua}"])
+        self.eval_tool = tool
+        code, _printed, _err = self.run_proof(flow=[f"map={lua}"])
         self.assertEqual(code, 0)
         digest = fc.hashlib.sha256(lua.read_bytes()).hexdigest()
         target = self.checkout / ".visual-proof.json"
@@ -2099,7 +2407,9 @@ class ProofTest(unittest.TestCase):
         with mock.patch.object(fc, "clear_eval_inbox") as clear:
             code, _printed, _err = self.run_proof()
         self.assertEqual(code, 0)
-        self.assertEqual(clear.call_args_list, [mock.call(), mock.call(quiet=True)])
+        self.assertEqual(clear.call_args_list[0], mock.call(), "the proof starts from an empty inbox")
+        self.assertEqual(clear.call_args_list[-1], mock.call(quiet=True), "and clears it again when it ends")
+        self.assertEqual(clear.call_args_list.count(mock.call()), 2, "the flow's own reload also clears its inbox")
 
     def test_a_lua_flow_that_raised_fails_the_proof_instead_of_passing_on_an_earlier_eval(self):
         # The reader used to answer with whatever eval the SavedVariables file held, which is the session before this
@@ -2110,9 +2420,9 @@ class ProofTest(unittest.TestCase):
         tool = mock.Mock()
         tool.EvalError = Exception
         tool.write_snippet.return_value = {"chunk": Path("/x/Eval.lua"), "snippet": lua, "lines": 1, "token": "run-1"}
+        self.eval_tool = tool
         with self.assertRaisesRegex(fc.ClientError, "holds the run 'earlier', not this snippet's 'run-1'"):
-            with mock.patch.object(fc, "devsmoke_eval", return_value=tool):
-                self.run_proof(flow=[f"hover a quest stop={lua}"])
+            self.run_proof(flow=[f"hover a quest stop={lua}"])
         self.create_gist.assert_not_called()
         self.assertFalse((self.checkout / ".visual-proof.json").exists())
 
@@ -2123,9 +2433,9 @@ class ProofTest(unittest.TestCase):
         tool = mock.Mock()
         tool.EvalError = Exception
         tool.write_snippet.return_value = {"chunk": Path("/x/Eval.lua"), "snippet": lua, "lines": 1, "token": "run-1"}
-        with mock.patch.object(fc, "devsmoke_eval", return_value=tool):
-            with self.assertRaises(fc.ClientError) as failure:
-                self.run_proof(flow=[f"hover a quest stop={lua}"])
+        self.eval_tool = tool
+        with self.assertRaises(fc.ClientError) as failure:
+            self.run_proof(flow=[f"hover a quest stop={lua}"])
         self.assertIn(f"flow snippet {lua} failed", str(failure.exception))
         self.assertIn("Eval.lua:2: boom", str(failure.exception), "the proof fails on the snippet's own error")
         self.create_gist.assert_not_called()

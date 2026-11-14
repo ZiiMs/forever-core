@@ -13,6 +13,7 @@ needs `tesseract` on PATH to locate the launcher's visible Play control from the
     forever_client.py status
     forever_client.py shot [PATH]         # PNG of what the client shows now
     forever_client.py click X Y           # left click at a point in the 1920x1080 frame (after a fresh shot)
+    forever_client.py scroll X Y N        # N wheel-up ticks (zoom in) or -N wheel-down ticks, at a point
     forever_client.py key Escape          # Return, Escape or BackSpace
     forever_client.py slash "/fgf"        # open chat, type a Forever addon's slash command, send it
     forever_client.py reload              # /reload and wait for the world to load again
@@ -37,15 +38,17 @@ reaches Python's handlers leaves that record behind, and the next `up`, `run`, `
 it before it touches AddOns.
 
 `proof` records the in-game visual proof a release prep or a ForeverCore pin bump needs. It builds and links the
-candidate the way `smoke` does, reloads once, runs each `--flow NAME=SLASH_OR_LUA_FILE` (a Forever addon's own slash
-command, or a Lua file through `!!DevSmoke`), takes a screenshot after each, uploads the PNGs to a new secret gist, and
-writes `<checkout>/.visual-proof.json` from `visual_proof --digests` with full-SHA raw URLs and each image's sha256,
-then checks the installed folder with `visual_proof --compare`. It never commits or pushes the checkout. A Lua flow
-that returns a ready check is captured once `!!DevSmoke` has polled it true, with a 60 s timeout, so a window filled
-in from late data is not photographed empty (#593); `wow-forever-addon/in-game.md` shows it. There is no default flow:
-ForeverCore has no shared opener for an addon's update notice, so the flow is named on the command line and
-`wow-forever-addon/in-game.md` shows it. A Lua flow's own result is read after its screenshot, and a snippet that
-raised fails the proof before any gist or `.visual-proof.json` exists (#580).
+candidate the way `smoke` does, reloads once, runs each `--flow NAME=SLASH_OR_LUA_FILE` through `!!DevSmoke` (a
+Forever addon's own slash command, or a Lua file), takes a screenshot after each, uploads the PNGs to a new secret
+gist, and writes `<checkout>/.visual-proof.json` from `visual_proof --digests` with full-SHA raw URLs and each image's
+sha256, then checks the installed folder with `visual_proof --compare`. It never commits or pushes the checkout. A
+slash command runs through `ChatEdit_SendText`, the client's own parser, so the capture follows a confirmed run rather
+than a fixed pause (#573). A flow that returns a ready check is captured once `!!DevSmoke` has polled it true, so a
+window filled in from late data is not photographed empty (#593); a check that raises or never turns true records its
+reason and fails the proof with it. `wow-forever-addon/in-game.md` shows both. There is no default flow: ForeverCore
+has no shared opener for an addon's update notice, so the flow is named on the command line and
+`wow-forever-addon/in-game.md` shows it. A flow's own result is read after its screenshot, and a snippet that raised
+fails the proof before any gist or `.visual-proof.json` exists (#580).
 
 One Battle.net account means one client: `up` holds an exclusive lock for the session's lifetime and refuses to
 start while any process uses the Wine prefix, which is how a player's own running client is left alone. `--wait`
@@ -133,6 +136,10 @@ LAUNCH_ARGS = ["--exec=launch_uid wowf"]
 # page that --exec opens. The target is read from the private gamescope screenshot, in its own pixel coordinates.
 # The account's Battle.net region: the launcher logs in here before it can start the game.
 BATTLE_NET = ("eu.actual.battle.net", 1119)
+# A driver upgrade whose loaded kernel module is still the old one makes Vulkan fail before gamescope can start. The
+# module names itself here, and nvidia-smi or the installed userspace library names the other half (#567).
+NVIDIA_MODULE_VERSION = Path("/sys/module/nvidia/version")
+NVIDIA_MISMATCH = "driver/library version mismatch"
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "forever-client"
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "forever-client/env.json"
 ADDON = Path(__file__).resolve().parent / "!!ForeverHeadless"
@@ -142,10 +149,10 @@ WAIT_POLL = 1.0  # how often a `--wait` queue checks the lock and the Wine prefi
 LOGOUT_WAIT = 60  # /quit outside an inn counts down 20 s before the client exits
 INPUT_GAP = 1.5
 TYPE_DELAY_MS = "120"
-# Seconds a proof waits after a slash flow before its screenshot (run_flow).
-SLASH_SETTLE_SECONDS = 3
-# Seconds a proof waits for a Lua flow to say its window is ready, by the screenshot !!DevSmoke takes then.
-FLOW_READY_SECONDS = 60
+WHEEL_DELAY_MS = "120"
+# Seconds a proof waits for a flow's screenshot, or for !!DevSmoke's failure record. Its own ready check stops at
+# 60 s; the extra 5 s only lets that failure reach SavedVariables before the proof falls back to its final reload.
+FLOW_READY_SECONDS = 65
 FOREVER_ADDONS = (
     # The dev addon behind /devsmoke: its commands are the suite's own test surface.
     "!!DevSmoke",
@@ -402,6 +409,69 @@ def runtime_dir(environ: Mapping[str, str], uid: int, root: Path = Path("/run/us
     return path
 
 
+def nvidia_userspace_version(run=None) -> str | None:
+    """The installed NVIDIA userspace driver version, when nvidia-smi cannot report it itself.
+
+    An upgraded userspace whose loaded module is still the old one makes nvidia-smi fail with its own mismatch line.
+    The installed package (Arch's nvidia-utils, Debian's nvidia-driver) or the versioned NVML library then names the
+    userspace half, so the error can give both versions rather than only "Vulkan failed" (#567).
+    """
+    run = run or subprocess.run
+    for command in (
+        ["pacman", "-Q", "nvidia-utils"],
+        ["dpkg-query", "-W", "-f=${Version}\n", "nvidia-driver"],
+    ):
+        try:
+            result = run(command, capture_output=True, text=True, check=False)
+        except OSError:
+            continue
+        if result.returncode == 0:
+            words = (result.stdout or "").strip().split()
+            if words:
+                return words[-1].split("-", 1)[0]  # Arch's 620.70.06-1 is driver 620.70.06
+    for library in sorted(Path("/usr/lib").glob("libnvidia-ml.so.*")):
+        match = re.search(r"\.so\.(\d+(?:\.\d+)+)$", library.name)
+        if match:
+            return match.group(1)
+    return None
+
+
+def nvidia_mismatch(module_path: Path = NVIDIA_MODULE_VERSION, run=None) -> str | None:
+    """The loaded NVIDIA module and its userspace disagreeing, as the sentence `up` prints, or None.
+
+    A driver package upgrade installs new userspace while the old kernel module stays loaded until a reboot. Vulkan
+    then finds no device and gamescope asserts, which used to surface only as "gamescope started no client" (#567).
+    """
+    try:
+        module = module_path.read_text().strip()
+    except OSError:
+        return None
+    if not module:
+        return None
+    run = run or subprocess.run
+    try:
+        smi = run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if smi.returncode == 0:
+        lines = (smi.stdout or "").strip().splitlines()
+        userspace = lines[0].strip() if lines else ""
+        if userspace and userspace != module:
+            return f"the NVIDIA kernel module ({module}) does not match its userspace ({userspace}): reboot first"
+        return None
+    output = f"{smi.stdout or ''}\n{smi.stderr or ''}".casefold()
+    if NVIDIA_MISMATCH not in output:
+        return None
+    userspace = nvidia_userspace_version(run)
+    detail = f" ({userspace})" if userspace else ""
+    return f"the NVIDIA kernel module ({module}) does not match its userspace{detail}: reboot first"
+
+
 def shot(state: Mapping, path: Path) -> Path:
     if "runtime_dir" not in state:
         raise ClientError("session has no runtime directory recorded; restart the headless session")
@@ -435,6 +505,33 @@ def click(state: Mapping, px: int, py: int, button: str) -> None:
             raise ClientError("the game has started: wait for READY before clicking")
 
     send(state, "mousemove", str(px), str(py), "click", button, before_input=launcher_guard)
+
+
+def scroll(state: Mapping, px: int, py: int, ticks: int) -> None:
+    """Turn the mouse wheel at a point in the current frame: positive is up (zoom in), negative down.
+
+    The world map's zoom lives on its ScrollContainer, which a click does not reach and `slash` refuses to open up as
+    arbitrary Lua. This is the same screenshot-bound input as `click`, so it aims only at UI just read in a shot (#548).
+    """
+    if ticks == 0:
+        raise ClientError("scroll takes a non-zero number of wheel ticks: positive up, negative down")
+    if mark("last-shot") <= mark("last-input"):
+        raise ClientError("take a `shot` and read it first: a scroll must aim at addon UI in the current frame")
+    if not (0 <= px < WIDTH and 0 <= py < HEIGHT):
+        raise ClientError(f"({px}, {py}) is outside the {WIDTH}x{HEIGHT} frame")
+    button = "4" if ticks > 0 else "5"  # X11 wheel up and wheel down
+    send(
+        state,
+        "mousemove",
+        str(px),
+        str(py),
+        "click",
+        "--repeat",
+        str(abs(ticks)),
+        "--delay",
+        WHEEL_DELAY_MS,
+        button,
+    )
 
 
 def press(state: Mapping, keys: Sequence[str]) -> None:
@@ -1247,13 +1344,32 @@ def flow_step(action: str) -> str:
     return f"{path.name} sha256:{digest}"
 
 
-def wait_for_flow_ready(before: set[Path], action: str, timeout: float = FLOW_READY_SECONDS) -> Path:
-    """Block until a Lua flow says its window is ready to be captured, by the screenshot it takes then.
+def flow_ready_failure(token: str | None) -> str | None:
+    """The readiness failure !!DevSmoke recorded for this run token, when it is already on disk.
+
+    A ready check that raises or never turns true writes `ready` and `readyErr` into DevSmokeDB.eval and asks the
+    client to save it, so the proof can report the client's own reason rather than only its timeout (#593).
+    """
+    if not token:
+        return None
+    try:
+        data = saved_eval(token)
+    except ClientError:
+        return None
+    if data.get("ready") in ("failed", "timeout"):
+        return _text(data.get("readyErr")) or f"the flow's ready check {data['ready']}"
+    return None
+
+
+def wait_for_flow_ready(
+    before: set[Path], action: str, token: str | None = None, timeout: float = FLOW_READY_SECONDS
+) -> Path:
+    """Block until a flow says its window is ready, by the screenshot it takes then or the failure it records.
 
     Every reload writes one screenshot as the world loads, and !!DevSmoke writes the flow's own once the flow returns
     true from its ready check. Both appear after `before`, and the flow's is the later one, so the second new file is
     the flag the capture waits on: a window filled in from late data is captured after it has filled rather than after
-    a fixed pause (#593). A flow that never signals fails here.
+    a fixed pause (#593). A check that raises or never turns true records why, and the proof fails on that reason.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -1265,9 +1381,12 @@ def wait_for_flow_ready(before: set[Path], action: str, timeout: float = FLOW_RE
                 continue  # the client wrote or rotated it between the glob and the read
         if len(fresh) >= 2:
             return max(fresh)[1]
+        failure = flow_ready_failure(token)
+        if failure:
+            raise ClientError(f"the flow {action} could not be captured: {failure}")
         time.sleep(1)
     raise ClientError(
-        f"the flow {action} did not say it was ready to capture within {timeout:.0f} s: a Lua flow signals with the "
+        f"the flow {action} did not say it was ready to capture within {timeout:.0f} s: a flow signals with the "
         "screenshot !!DevSmoke takes once its ready check returns true (see wow-forever-addon/in-game.md)"
     )
 
@@ -1289,24 +1408,41 @@ def parse_flows(values: Sequence[str]) -> list[tuple[str, str]]:
     return flows
 
 
-def run_flow(state: Mapping, action: str) -> str | None:
-    """Run one proof flow: a Forever addon's own slash command, or a Lua file through !!DevSmoke.
+def flow_capture_failure(state: Mapping, action: str, token: str, timeout: ClientError) -> ClientError:
+    """The precise failure for a flow that produced no screenshot, or its timeout when none was recorded.
 
-    A Lua flow answers the run token its snippet wrote, whose result `check_flow_eval` reads once the screenshot is
-    taken: the reload that saves the result to disk would close the window the flow just opened (#580). The flow's
-    ready check is polled by !!DevSmoke, whose screenshot then says the window has drawn, so the capture waits for
-    that file instead of a pause (#593).
+    !!DevSmoke saves a failing ready check into DevSmokeDB.eval as it happens. If that record is not on disk yet, the
+    proof reloads once to save it; the inbox is already cleared, so the reload does not run the flow again (#593).
     """
-    if not lua_flow(action):
-        slash(state, action)
-        # The client reads typed input on its own frames and reports nothing back while it runs, so the screenshot
-        # waits this long for the command to run and its window to draw (#573). A Lua flow needs no wait: it runs
-        # during the reload below.
-        time.sleep(SLASH_SETTLE_SECONDS)
-        return None
+    failure = flow_ready_failure(token)
+    if failure:
+        return ClientError(f"the flow {action} could not be captured: {failure}")
+    try:
+        reload(state)
+    except ClientError:
+        return timeout
+    failure = flow_ready_failure(token)
+    if failure:
+        return ClientError(f"the flow {action} could not be captured: {failure}")
+    return timeout
+
+
+def run_flow(state: Mapping, action: str) -> str:
+    """Run one proof flow through !!DevSmoke: a Forever addon's own slash command, or a Lua file.
+
+    Both routes write a snippet whose own run token `check_flow_eval` reads once the screenshot is taken: the reload
+    that saves the result to disk would close the window the flow just opened (#580). A slash command runs through
+    `ChatEdit_SendText`, the client's own parser, so the capture follows a confirmed run rather than a fixed pause
+    (#573). The flow's ready check is polled by !!DevSmoke, whose screenshot then says the window has drawn, so the
+    capture waits for that file instead of a pause (#593).
+    """
     tool = devsmoke_eval()
     try:
-        written = tool.write_snippet(Path(action), addons=CLIENT / "Interface/AddOns")
+        if lua_flow(action):
+            written = tool.write_snippet(Path(action), addons=CLIENT / "Interface/AddOns", capture=True)
+        else:
+            allowed_command(action)
+            written = tool.write_slash(action, addons=CLIENT / "Interface/AddOns", capture=True)
     except tool.EvalError as error:
         raise ClientError(str(error)) from None
     print(f"wrote {written['chunk']} from {written['snippet']} ({written['lines']} lines)", flush=True)
@@ -1315,7 +1451,10 @@ def run_flow(state: Mapping, action: str) -> str | None:
     before = screenshots()
     reload(state)
     clear_eval_inbox()
-    wait_for_flow_ready(before, action)
+    try:
+        wait_for_flow_ready(before, action, written["token"])
+    except ClientError as error:
+        raise flow_capture_failure(state, action, written["token"], error) from None
     return written["token"]
 
 
@@ -1569,6 +1708,20 @@ def proof(args: argparse.Namespace) -> int:
 # --- session lifecycle -----------------------------------------------------------------------------------------
 
 
+def gamescope_failure_hint() -> str:
+    """What the session log says when gamescope started no client, including a driver mismatch (#567)."""
+    try:
+        log = (STATE_DIR / "session.log").read_text(errors="replace")
+    except OSError:
+        return ""
+    if "vkCreateInstance failed" not in log and "CVulkanDevice::BInit" not in log:
+        return ""
+    mismatch = nvidia_mismatch()
+    if mismatch:
+        return f"; {mismatch}"
+    return "; gamescope could not create a Vulkan instance: see the session log"
+
+
 def child_env(token: str, timeout: float = 30) -> dict[str, str]:
     """Gamescope hands its children DISPLAY and GAMESCOPE_WAYLAND_DISPLAY: read them from the first child.
 
@@ -1581,7 +1734,7 @@ def child_env(token: str, timeout: float = 30) -> dict[str, str]:
             if env.get("FOREVER_CLIENT_SESSION") == token and env.get("GAMESCOPE_WAYLAND_DISPLAY"):
                 return env
         time.sleep(0.5)
-    raise ClientError("gamescope started no client: see the session log")
+    raise ClientError(f"gamescope started no client: see the session log{gamescope_failure_hint()}")
 
 
 def log_out(state: Mapping) -> None:
@@ -1597,13 +1750,82 @@ def log_out(state: Mapping) -> None:
         time.sleep(1)
 
 
+def signal_pid(pid: int, started: int | None, signum: int) -> bool:
+    """Signal a process only if it is still the one that started at `started`, through a pidfd."""
+    if not isinstance(started, int):
+        return False
+    try:
+        pidfd = os.pidfd_open(pid)
+    except (AttributeError, OSError):
+        return False
+    try:
+        if process_start(pid) != started:
+            return False
+        signal.pidfd_send_signal(pidfd, signum)
+        return True
+    except ProcessLookupError:
+        return False
+    finally:
+        os.close(pidfd)
+
+
+def wait_for_pid(pid: int, started: int | None, timeout: float) -> bool:
+    """Wait until the recorded process is gone, without treating a reused pid as it."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not owner_alive({"pid": pid, "started": started}):
+            return True
+        time.sleep(0.1)
+    return not owner_alive({"pid": pid, "started": started})
+
+
+def gamescope_running(gamescope: subprocess.Popen | int | None, state: Mapping | None) -> bool:
+    """Whether the session's gamescope still runs, from a live handle or the pid a dead owner left in state."""
+    if gamescope is None:
+        return False
+    if hasattr(gamescope, "poll"):
+        return gamescope.poll() is None
+    started = state.get("gamescope_start") if state else None
+    return owner_alive({"pid": int(gamescope), "started": started})
+
+
+def stop_gamescope(gamescope: subprocess.Popen | int | None, state: Mapping | None) -> None:
+    """Stop the session's gamescope, by its live handle or by the pid a dead owner recorded."""
+    if not gamescope_running(gamescope, state):
+        return
+    if hasattr(gamescope, "poll"):
+        try:
+            gamescope.terminate()
+        except ProcessLookupError:
+            return
+        try:
+            gamescope.wait(20)
+        except subprocess.TimeoutExpired:
+            try:
+                gamescope.kill()
+            except ProcessLookupError:
+                return
+            gamescope.wait(20)
+        return
+    pid = int(gamescope)
+    started = state.get("gamescope_start") if state else None
+    if signal_pid(pid, started, signal.SIGTERM) and not wait_for_pid(pid, started, 20):
+        signal_pid(pid, started, signal.SIGKILL)
+        wait_for_pid(pid, started, 20)
+    if gamescope_running(gamescope, state):
+        raise ClientError(f"cannot safely stop gamescope {pid}: session state retained")
+
+
 def teardown(
-    gamescope: subprocess.Popen | None, wine: Mapping[str, str], link: Path | None, state: Mapping | None
+    gamescope: subprocess.Popen | int | None,
+    wine: Mapping[str, str],
+    link: Path | None,
+    state: Mapping | None,
 ) -> None:
     token = state.get("token") if state else None
     require_owned_prefix(token)
     # Only a session in the world types /quit: at the character list Enter would enter the world instead.
-    if state and state.get("ready") and gamescope and gamescope.poll() is None and client_pid():
+    if state and state.get("ready") and gamescope_running(gamescope, state) and client_pid():
         log_out(state)
     server = wineserver(wine)
     # Never use prefix-wide wineserver shutdown: another client can appear between ownership checks. Keep checking
@@ -1632,13 +1854,7 @@ def teardown(
         time.sleep(0.25)
     # Do not trigger gamescope's child reaper while a shared Wine server could still serve another client.
     # Display processes do not inherit WINEPREFIX, so they remain alive until all Wine processes exit naturally.
-    if gamescope and gamescope.poll() is None:
-        gamescope.terminate()
-        try:
-            gamescope.wait(20)
-        except subprocess.TimeoutExpired:
-            gamescope.kill()
-            gamescope.wait(20)
+    stop_gamescope(gamescope, state)
     if link and link.is_symlink():
         link.unlink()
     state_file().unlink(missing_ok=True)
@@ -1706,6 +1922,9 @@ def at_character_select(state: Mapping, manual_launcher: bool) -> None:
 
 def up(args: argparse.Namespace, after_ready=None) -> int:
     recover_links()
+    mismatch = nvidia_mismatch()
+    if mismatch:
+        raise ClientError(mismatch)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     lock = open(STATE_DIR / "lock", "w")
     if args.wait:
@@ -1744,7 +1963,7 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
     wine = launch["env"]
 
     link = CLIENT / "Interface/AddOns" / ADDON.name
-    gamescope: subprocess.Popen | None = None
+    gamescope: subprocess.Popen | int | None = None
     state: dict | None = None
     stop = {"signal": None}
 
@@ -1771,6 +1990,21 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
         env["FOREVER_CLIENT_SESSION"] = token
         before = screenshots()
         started = time.time()
+        # The session's ownership exists before its first child does, so an interrupt at the spawn has a token for
+        # teardown rather than leaving unowned Wine processes and gamescope behind (#578).
+        state = {
+            "pid": os.getpid(),
+            "owner_start": process_start(os.getpid()),
+            "gamescope": None,
+            "gamescope_start": None,
+            "token": token,
+            "started": started,
+            "runtime_dir": str(runtime),
+            "manual_launcher": args.manual_launcher,
+            "wine": {"PROTONPATH": wine["PROTONPATH"]} if wine.get("PROTONPATH") else {},
+            "link": str(link),
+        }
+        state_file().write_text(json.dumps(state))
         gamescope = subprocess.Popen(
             [
                 "gamescope",
@@ -1794,14 +2028,9 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-        state = {
-            "pid": os.getpid(),
-            "gamescope": gamescope.pid,
-            "token": token,
-            "started": started,
-            "runtime_dir": str(runtime),
-            "manual_launcher": args.manual_launcher,
-        }
+        state["gamescope"] = gamescope.pid
+        state["gamescope_start"] = process_start(gamescope.pid)
+        state_file().write_text(json.dumps(state))
         genv = child_env(token)
         state.update(display=genv["DISPLAY"], gamescope_socket=genv["GAMESCOPE_WAYLAND_DISPLAY"])
         state_file().write_text(json.dumps(state))
@@ -1835,16 +2064,46 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
 
 
 def down() -> int:
+    """Stop the session named by the state file, or tear down what a dead owner left behind.
+
+    The owner's own teardown is the normal path. Once that process is gone it can no longer run it, so `down` does
+    the same work itself: the token-owned Wine processes, gamescope from `state["gamescope"]`, the dev addon link and
+    the state file (#578). A pid that no longer exists must not crash `down`.
+    """
     state = load_state()
-    os.kill(state["pid"], signal.SIGTERM)
-    # Teardown logs out (up to LOGOUT_WAIT), then gives gamescope 20 s and ends Wine.
-    limit = LOGOUT_WAIT + 60
-    deadline = time.monotonic() + limit
-    while time.monotonic() < deadline:
+    owner = {"pid": state.get("pid"), "started": state.get("owner_start")}
+    if owner_alive(owner):
+        # Bind the signal to the checked process. A plain kill can hit a reused pid after owner_alive returns.
+        if signal_pid(state["pid"], state.get("owner_start"), signal.SIGTERM):
+            # Teardown logs out (up to LOGOUT_WAIT), then gives gamescope 20 s and ends Wine.
+            limit = LOGOUT_WAIT + 60
+            deadline = time.monotonic() + limit
+            while time.monotonic() < deadline:
+                if not state_file().exists():
+                    return 0
+                if not owner_alive(owner):
+                    break
+                time.sleep(0.5)
+            if owner_alive(owner):
+                raise ClientError(f"session {state['pid']} did not stop within {limit} s")
+        elif owner_alive(owner):
+            raise ClientError(f"cannot safely signal session {state['pid']}: session state retained")
+    # A new up may acquire the released lock before this fallback does. Serialize cleanup with it and re-read the
+    # record under that lock, so this down cannot remove the next session's link or state.
+    with open(STATE_DIR / "lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ClientError("another session holds the client: stale cleanup deferred") from None
         if not state_file().exists():
             return 0
-        time.sleep(0.5)
-    raise ClientError(f"session {state['pid']} did not stop within {limit} s")
+        if load_state() != state:
+            raise ClientError("the headless session changed: stale cleanup deferred")
+        recover_links()
+        link = Path(state["link"]) if state.get("link") else CLIENT / "Interface/AddOns" / ADDON.name
+        teardown(state.get("gamescope"), state.get("wine") or {}, link, state)
+        state_file().unlink(missing_ok=True)
+    return 0
 
 
 def wineserver(wine: Mapping[str, str]) -> Path:
@@ -2018,6 +2277,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("x", type=int)
     p.add_argument("y", type=int)
     p.add_argument("--button", default="1", choices=("1", "3"))
+    p = sub.add_parser("scroll")
+    p.add_argument("x", type=int)
+    p.add_argument("y", type=int)
+    p.add_argument("ticks", type=int, help="wheel-up ticks (zoom in) when positive, wheel-down when negative")
     p = sub.add_parser("key")
     p.add_argument("keys", nargs="+")
     p = sub.add_parser("slash")
@@ -2112,6 +2375,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(shot(state, args.path or STATE_DIR / f"shot-{int(time.time())}.png"))
         elif args.verb == "click":
             click(state, args.x, args.y, args.button)
+        elif args.verb == "scroll":
+            scroll(state, args.x, args.y, args.ticks)
         elif args.verb == "key":
             press(state, args.keys)
         elif args.verb == "slash":
@@ -2126,19 +2391,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"-- {f}\n{f.read_text(errors='replace')}")
         elif args.verb == "eval":
             tool = devsmoke_eval()
+            cleared = False
             try:
                 try:
-                    written = tool.write_snippet(args.file, addons=CLIENT / "Interface/AddOns")
+                    # An eval is not a proof flow: it must not schedule a ready screenshot that would race the
+                    # reload saving its result (#588).
+                    written = tool.write_snippet(args.file, addons=CLIENT / "Interface/AddOns", capture=False)
                 except tool.EvalError as error:
                     raise ClientError(str(error)) from None
                 print(f"wrote {written['chunk']} from {written['snippet']} ({written['lines']} lines)", flush=True)
-                # This reload runs the snippet; eval_result's own reload saves that result for the reader (#580).
+                # This reload runs the snippet once. Clearing the inbox before the next reload keeps that reload from
+                # running it a second time; that reload saves the first run's result for the reader (#580, #588).
                 reload(state)
+                clear_eval_inbox()
+                cleared = True
                 report, ok = eval_result(state, written["token"])
                 print(report)
                 return 0 if ok else 1
             finally:
-                clear_eval_inbox(quiet=True)
+                if not cleared:
+                    clear_eval_inbox(quiet=True)
         elif args.verb == "errors":
             completed = errors(state, args.addon)
             sys.stdout.write(completed.stdout)

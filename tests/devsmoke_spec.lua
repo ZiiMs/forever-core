@@ -31,6 +31,8 @@ local fakeCalls = { count = 0, messages = {} }
 local stop = 0
 local fakeDurations = { 0, 9 }
 
+local saves = 0
+
 local function addAddon(name, loaded, deps, version)
 	addons[#addons + 1] = { name = name, loaded = loaded ~= false, deps = deps, version = version }
 end
@@ -122,6 +124,9 @@ _G.C_AddOns = {
 				return field == "Version" and addon.version or nil
 			end
 		end
+	end,
+	SaveAddOns = function()
+		saves = saves + 1
 	end,
 }
 
@@ -689,9 +694,28 @@ equal(
 	"the usage lists every command"
 )
 
--- A Lua flow says when its window is ready to be captured (#593): a returned function is polled, and the client's
--- own screenshot when it turns true is the file `proof` waits for before its capture.
+-- An eval is not a proof flow: its chunk says so, so a returned function is not polled and no delayed screenshot can
+-- race the reload that saves the eval's own result (#588).
+local evalPolls = 0
+_G.DevSmokeEvalCapture = false
+DevSmokeEvalRun = "run-eval"
+DevSmokeEval = function()
+	return function()
+		evalPolls = evalPolls + 1
+		return true
+	end
+end
+local evalOnlyLines = command("eval")
+equal(#evalOnlyLines, 1, "an eval function is still not printed")
+fire("PLAYER_ENTERING_WORLD")
+drain()
+equal(evalPolls, 0, "an eval does not poll a proof ready check")
+equal(screenshots, 0, "an eval leaves no screenshot to race its saving reload")
+
+-- A Lua proof flow says when its window is ready to be captured (#593): a returned function is polled, and the
+-- client's own screenshot when it turns true is the file `proof` waits for before its capture.
 local polls = 0
+_G.DevSmokeEvalCapture = true
 DevSmokeEvalRun = "run-ready"
 DevSmokeEval = function()
 	return function()
@@ -706,6 +730,7 @@ fire("PLAYER_ENTERING_WORLD")
 drain()
 equal(polls, 2, "the flow is polled until its ready check is true")
 equal(screenshots, 1, "the ready flow takes the screenshot the proof waits for")
+equal(DevSmokeDB.eval.ready, "captured", "a captured flow records its readiness")
 
 -- A flow with no ready check is still captured, after the world load's own screenshot.
 DevSmokeEval = function()
@@ -714,6 +739,40 @@ end
 command("eval")
 drain()
 equal(screenshots, 2, "a flow without a ready check is captured once the world is up")
+
+-- A ready check that raises records the client's own reason and saves it for the proof, which then reports that
+-- reason instead of only its timeout (#593).
+local savesBefore = saves
+DevSmokeEvalRun = "run-failed-ready"
+DevSmokeEval = function()
+	return function()
+		error("ready boom")
+	end
+end
+command("eval")
+fire("PLAYER_ENTERING_WORLD")
+drain()
+equal(screenshots, 2, "a failed ready check takes no screenshot")
+equal(DevSmokeDB.eval.ready, "failed", "the readiness failure is recorded")
+check(DevSmokeDB.eval.readyErr:find("ready boom", 1, true) ~= nil, "the client's reason is kept")
+equal(saves, savesBefore + 1, "the failure is saved so the proof can read it")
+
+DevSmokeEvalRun = "run-timeout-ready"
+DevSmokeEval = function()
+	return function()
+		stop = stop + 61000
+		return false
+	end
+end
+command("eval")
+drain()
+equal(screenshots, 2, "a timed out ready check takes no screenshot")
+equal(DevSmokeDB.eval.ready, "timeout", "readiness stops at the proof's bound")
+check(DevSmokeDB.eval.readyErr:find("60 s", 1, true) ~= nil, "the timeout names its exact bound")
+equal(saves, savesBefore + 2, "a timeout is saved for the proof reader")
+
+-- The ordinary eval checks below are not proof flows either.
+_G.DevSmokeEvalCapture = false
 
 -- /devsmoke eval runs the chunk the generated !!DevSmokeInbox addon defines: what it prints and every value it
 -- returns reach the Agent tab and DevSmokeDB.eval, and an error is caught there instead of reaching BugGrabber. The

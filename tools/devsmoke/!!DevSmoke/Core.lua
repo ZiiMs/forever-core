@@ -255,12 +255,22 @@ end
 -- A proof captures a Lua flow's window only once the flow says it is ready: a snippet may return a function, polled
 -- here the way the client polls a timer, and the screenshot taken when it first returns true is the file the proof
 -- waits for (#593). It is delayed past the screenshot every world load takes, so the two files never share a name in
--- the Screenshots folder, and a flow with no ready check is captured at that same point.
+-- the Screenshots folder, and a flow with no ready check is captured at that same point. The limit is the proof's
+-- readiness bound, so a check that never turns true stops here rather than taking a late screenshot over the next flow.
 local FLOW_SHOT_DELAY = 3.2
 local FLOW_POLL = 0.25
-local FLOW_READY_LIMIT = 120
+local FLOW_READY_LIMIT = 60
 local flowWorldLoaded = false
 local flowWaiting = {}
+
+-- The proof reads the readiness outcome from this addon's SavedVariables, so a failure has to reach disk before the
+-- proof's bounded wait ends. SaveAddOns writes them now; without it the proof's final reload saves the same record.
+local function saveAddOns()
+	local addons = C_AddOns
+	if type(addons) == "table" and type(addons.SaveAddOns) == "function" then
+		pcall(addons.SaveAddOns)
+	end
+end
 
 local function flowWorldReady()
 	flowWorldLoaded = true
@@ -278,8 +288,13 @@ flowWorld:SetScript("OnEvent", flowWorldReady)
 local function captureFlow(ready)
 	local finished = false
 	local deadline
-	local function stop(message)
+	local function stop(status, message)
 		finished = true
+		if DevSmokeDB and DevSmokeDB.eval then
+			DevSmokeDB.eval.ready = status
+			DevSmokeDB.eval.readyErr = message
+			saveAddOns()
+		end
 		say("Dev Smoke: " .. message)
 	end
 	local function poll()
@@ -291,12 +306,15 @@ local function captureFlow(ready)
 			ok, value = pcall(ready)
 		end
 		if not ok then
-			stop("the flow's ready check failed: " .. textOf(value))
+			stop("failed", "the flow's ready check failed: " .. textOf(value))
 		elseif value then
 			finished = true
+			if DevSmokeDB and DevSmokeDB.eval then
+				DevSmokeDB.eval.ready = "captured"
+			end
 			Screenshot()
 		elseif debugprofilestop() > deadline then
-			stop(("the flow was not ready to capture within %d s"):format(FLOW_READY_LIMIT))
+			stop("timeout", ("the flow was not ready to capture within %d s"):format(FLOW_READY_LIMIT))
 		else
 			C_Timer.After(FLOW_POLL, poll)
 		end
@@ -318,10 +336,13 @@ end
 --
 -- Eval.lua also defines DevSmokeEvalRun, a fresh token for every write, read before the chunk runs so a snippet that
 -- reuses the name cannot change it. DevSmokeDB.eval.run carries it, so a reader that only has the SavedVariables file
--- can tell this snippet's own result from an earlier session's (#580).
+-- can tell this snippet's own result from an earlier session's (#580). DevSmokeEvalCapture says whether this chunk
+-- is a proof flow: an eval chunk is false, because its delayed ready screenshot would race the reload that saves it
+-- (#588).
 local function runEval()
 	local chunk = DevSmokeEval
 	local token = DevSmokeEvalRun
+	local wantsCapture = _G.DevSmokeEvalCapture
 	agentFrame()
 	local lines = {}
 	local original = _G.print
@@ -363,7 +384,7 @@ local function runEval()
 	for _, line in ipairs(lines) do
 		say(line)
 	end
-	if ok then
+	if ok and wantsCapture ~= false then
 		captureFlow(ready)
 	end
 end
