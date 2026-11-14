@@ -60,6 +60,7 @@ equal(
 		"lua UI/TrackerLock.lua",
 		"lua UI/TrackerOrder.lua",
 		"lua UI/ContextMenu.lua",
+		"lua UI/TrackerKaliels.lua",
 		"lua UI/TrackerHost.lua",
 		"xml UI/TrackerSection.xml",
 		"lua UI/TrackerSection.lua",
