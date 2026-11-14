@@ -40,9 +40,11 @@ it before it touches AddOns.
 candidate the way `smoke` does, reloads once, runs each `--flow NAME=SLASH_OR_LUA_FILE` (a Forever addon's own slash
 command, or a Lua file through `!!DevSmoke`), takes a screenshot after each, uploads the PNGs to a new secret gist, and
 writes `<checkout>/.visual-proof.json` from `visual_proof --digests` with full-SHA raw URLs and each image's sha256,
-then checks the installed folder with `visual_proof --compare`. It never commits or pushes the checkout. There is no
-default flow: ForeverCore has no shared opener for an addon's update notice, so the flow is named on the command line
-and `wow-forever-addon/in-game.md` shows it. A Lua flow's own result is read after its screenshot, and a snippet that
+then checks the installed folder with `visual_proof --compare`. It never commits or pushes the checkout. A Lua flow
+that returns a ready check is captured once `!!DevSmoke` has polled it true, with a 60 s timeout, so a window filled
+in from late data is not photographed empty (#593); `wow-forever-addon/in-game.md` shows it. There is no default flow:
+ForeverCore has no shared opener for an addon's update notice, so the flow is named on the command line and
+`wow-forever-addon/in-game.md` shows it. A Lua flow's own result is read after its screenshot, and a snippet that
 raised fails the proof before any gist or `.visual-proof.json` exists (#580).
 
 One Battle.net account means one client: `up` holds an exclusive lock for the session's lifetime and refuses to
@@ -84,6 +86,7 @@ import sys
 import tarfile
 import time
 import uuid
+import zlib
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
@@ -141,6 +144,8 @@ INPUT_GAP = 1.5
 TYPE_DELAY_MS = "120"
 # Seconds a proof waits after a slash flow before its screenshot (run_flow).
 SLASH_SETTLE_SECONDS = 3
+# Seconds a proof waits for a Lua flow to say its window is ready, by the screenshot !!DevSmoke takes then.
+FLOW_READY_SECONDS = 60
 FOREVER_ADDONS = (
     # The dev addon behind /devsmoke: its commands are the suite's own test surface.
     "!!DevSmoke",
@@ -486,13 +491,213 @@ def slash(state: Mapping, command: str) -> None:
     send(state, "key", "Return")
 
 
+# --- the launcher's Play button ----------------------------------------------------------------------------------
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_CHANNELS = {2: 3, 6: 4}  # truecolour, and truecolour with alpha
+# The flat fill the launcher draws its primary Play button in on the game page. The word sits inside it as white
+# text, and a whole-page tesseract pass skips the filled button along with its label, so the drawn fill is what
+# locates the control: no fixed point and no page layout (#547). A launcher build that draws another fill is a change
+# here, and the saved frame beside the spec is what shows the difference.
+PLAY_FILL = bytes((0, 116, 224))
+PLAY_LABEL = "play"
+
+
+def png_pixels(path: Path) -> tuple[int, int, int, list[bytes]]:
+    """The screenshot's width, height, channels and rows, decoded without an image library.
+
+    gamescope writes an 8-bit, non-interlaced RGB or RGBA PNG. Anything else is a ClientError naming the file: a frame
+    this tool cannot read must never be reported as a launcher without Play.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise ClientError(f"cannot read the launcher screenshot {path}: {error}") from None
+    if data[:8] != PNG_SIGNATURE:
+        raise ClientError(f"{path} is not a PNG screenshot")
+    at = 8
+    compressed = []
+    width = height = channels = None
+    while at < len(data):
+        try:
+            length, kind = struct.unpack(">I4s", data[at : at + 8])
+        except struct.error:
+            raise ClientError(f"{path} is a truncated PNG") from None
+        body = data[at + 8 : at + 8 + length]
+        at += length + 12
+        if kind == b"IHDR":
+            try:
+                width, height, depth, colour, _compression, _filter, interlace = struct.unpack(">IIBBBBB", body)
+            except struct.error:
+                raise ClientError(f"{path} has a truncated PNG header") from None
+            channels = PNG_CHANNELS.get(colour)
+            if depth != 8 or channels is None or interlace != 0:
+                raise ClientError(
+                    f"{path} is not the 8-bit RGB or RGBA, non-interlaced PNG gamescope writes "
+                    f"(bit depth {depth}, colour type {colour}, interlace {interlace})"
+                )
+        elif kind == b"IDAT":
+            compressed.append(body)
+        elif kind == b"IEND":
+            break
+    if not width or not height or channels is None:
+        raise ClientError(f"{path} has no PNG header")
+    try:
+        raw = zlib.decompress(b"".join(compressed))
+    except zlib.error as error:
+        raise ClientError(f"{path} is not a readable PNG: {error}") from None
+    stride = width * channels
+    rows: list[bytes] = []
+    previous = bytes(stride)
+    at = 0
+    try:
+        for _row in range(height):
+            kind = raw[at]
+            at += 1
+            line = bytearray(raw[at : at + stride])
+            at += stride
+            png_unfilter(line, previous, channels, kind)
+            rows.append(bytes(line))
+            previous = rows[-1]
+    except (IndexError, ValueError) as error:
+        raise ClientError(f"{path} is a truncated PNG: {error}") from None
+    return width, height, channels, rows
+
+
+def png_unfilter(line: bytearray, previous: bytes, channels: int, kind: int) -> None:
+    """Undo one row's PNG filter in place, on the row before it."""
+    stride = len(line)
+    if kind == 0:
+        return
+    if kind == 1:  # Sub
+        for index in range(channels, stride):
+            line[index] = (line[index] + line[index - channels]) & 0xFF
+        return
+    if kind == 2:  # Up
+        for index in range(stride):
+            line[index] = (line[index] + previous[index]) & 0xFF
+        return
+    if kind == 3:  # Average
+        for index in range(stride):
+            left = line[index - channels] if index >= channels else 0
+            line[index] = (line[index] + ((left + previous[index]) >> 1)) & 0xFF
+        return
+    if kind == 4:  # Paeth
+        for index in range(stride):
+            left = line[index - channels] if index >= channels else 0
+            up = previous[index]
+            up_left = previous[index - channels] if index >= channels else 0
+            guess = left + up - up_left
+            distances = (abs(guess - left), abs(guess - up), abs(guess - up_left))
+            line[index] = (line[index] + (left, up, up_left)[distances.index(min(distances))]) & 0xFF
+        return
+    raise ValueError(f"PNG filter {kind}")
+
+
+def fill_regions(
+    width: int, height: int, channels: int, rows: Sequence[bytes], fill: bytes = PLAY_FILL
+) -> list[tuple[int, int, int, int, int]]:
+    """Every connected region drawn in `fill`, as its area and box, the largest first.
+
+    The fill is matched in the row's own bytes, so an RGB frame and an RGBA one are read the same way.
+    """
+    mask = bytearray(width * height)
+    for y, row in enumerate(rows):
+        at = row.find(fill)
+        while at != -1:
+            if at % channels == 0:
+                mask[y * width + at // channels] = 1
+            at = row.find(fill, at + 1)
+    regions = []
+    for start in range(width * height):
+        if not mask[start]:
+            continue
+        stack = [start]
+        mask[start] = 0
+        area = 0
+        left = right = start % width
+        top = bottom = start // width
+        while stack:
+            index = stack.pop()
+            area += 1
+            x, y = index % width, index // width
+            left, right = min(left, x), max(right, x)
+            top, bottom = min(top, y), max(bottom, y)
+            for neighbour, inside in (
+                (index - 1, x > 0),
+                (index + 1, x + 1 < width),
+                (index - width, y > 0),
+                (index + width, y + 1 < height),
+            ):
+                if inside and mask[neighbour]:
+                    mask[neighbour] = 0
+                    stack.append(neighbour)
+        regions.append((area, left, top, right - left + 1, bottom - top + 1))
+    regions.sort(reverse=True)
+    return regions
+
+
+def write_ppm(path: Path, rows: Sequence[bytes], channels: int, box: tuple[int, int, int, int]) -> None:
+    """One cropped region as a PPM, which tesseract reads and which needs no image encoder."""
+    left, top, width, height = box
+    data = bytearray(f"P6\n{width} {height}\n255\n".encode())
+    for y in range(top, top + height):
+        row = rows[y]
+        for x in range(left, left + width):
+            at = x * channels
+            data += row[at : at + 3]
+    path.write_bytes(data)
+
+
+def ocr_words(image: Path) -> list[tuple[str, float, int, int, int, int]]:
+    """The words tesseract reads in one image: text, confidence, and the word's box in that image."""
+    ocr = subprocess.run(
+        ["tesseract", str(image), "stdout", "--psm", "11", "tsv"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if ocr.returncode != 0:
+        raise ClientError(f"could not read {image} with tesseract: {ocr.stderr.strip()}")
+    words = []
+    for line in ocr.stdout.splitlines()[1:]:
+        fields = line.split("\t")
+        if len(fields) != 12:
+            continue
+        try:
+            left, top, width, height = (int(fields[index]) for index in (6, 7, 8, 9))
+            confidence = float(fields[10])
+        except (TypeError, ValueError):
+            continue
+        words.append((fields[11].strip(), confidence, left, top, width, height))
+    return words
+
+
+def play_targets(image: Path) -> list[tuple[int, int, int, int, float]]:
+    """Every visible Play label the launcher draws, as its box in the whole screenshot.
+
+    The label is found inside the button the launcher draws, not by the page layout tesseract guesses for the whole
+    frame: a whole-page pass skips the filled button and its word even when the word is plainly drawn (#547).
+    """
+    width, height, channels, rows = png_pixels(image)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    crop = STATE_DIR / "play-label.ppm"
+    targets = []
+    for _area, left, top, box_width, box_height in fill_regions(width, height, channels, rows):
+        write_ppm(crop, rows, channels, (left, top, box_width, box_height))
+        for text, confidence, x, y, word_width, word_height in ocr_words(crop):
+            if text.casefold() == PLAY_LABEL and confidence >= 0 and word_width > 0 and word_height > 0:
+                targets.append((left + x, top + y, word_width, word_height, confidence))
+    return targets
+
+
 def press_play(state: dict) -> None:
     """Find and click the visible Play label in the launcher's current screenshot.
 
-    Battle.net changes its page layout with the gamescope size and can show a login
-    dialog before the game page. A fixed point therefore either misses Play or clicks
-    another control. OCR is bounded to the private gamescope screenshot, so the
-    click remains screenshot-bound like the public ``click`` verb.
+    Battle.net changes its page layout with the gamescope size and can show a login dialog before the game page. A
+    fixed point therefore either misses Play or clicks another control. The button is located from the fill the
+    launcher draws it in, and the label is read inside that region, so the click is screenshot-bound like the public
+    ``click`` verb and does not depend on the page layout an OCR pass guesses for the whole frame.
     """
     found = subprocess.run(
         ["xdotool", "search", "--name", "^Battle.net$"],
@@ -506,26 +711,7 @@ def press_play(state: dict) -> None:
     if shutil.which("tesseract") is None:
         raise ClientError("tesseract is required for OCR; use up --manual-launcher for screenshot-guided clicks")
     image = shot(state, STATE_DIR / "launcher.png")
-    ocr = subprocess.run(
-        ["tesseract", str(image), "stdout", "--psm", "11", "tsv"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if ocr.returncode != 0:
-        raise ClientError(f"could not read the Battle.net Play target: {ocr.stderr.strip()}")
-    targets = []
-    for line in ocr.stdout.splitlines()[1:]:
-        fields = line.split("\t")
-        if len(fields) != 12 or fields[11].strip().casefold() != "play":
-            continue
-        try:
-            left, top, width, height = (int(fields[i]) for i in (6, 7, 8, 9))
-            confidence = float(fields[10])
-        except (ValueError, TypeError):
-            continue
-        if confidence >= 0 and width > 0 and height > 0:
-            targets.append((left, top, width, height, confidence))
+    targets = play_targets(image)
     if not targets:
         # The launcher can still be painting its signed-in page. The startup loop
         # retries within its existing deadline; never click an unobserved target.
@@ -548,9 +734,10 @@ def press_play(state: dict) -> None:
 
 
 def reload(state: Mapping, timeout: float = 120) -> Path:
-    before = screenshots()
+    # The new cycle's screenshots are the ones after the command was sent: a screenshot an earlier reload's flow
+    # still takes would otherwise be read as this one's world load.
     slash(state, "/reload")
-    return wait_for_world(before, timeout)
+    return wait_for_world(screenshots(), timeout)
 
 
 # --- dev builds ------------------------------------------------------------------------------------------------
@@ -1060,6 +1247,31 @@ def flow_step(action: str) -> str:
     return f"{path.name} sha256:{digest}"
 
 
+def wait_for_flow_ready(before: set[Path], action: str, timeout: float = FLOW_READY_SECONDS) -> Path:
+    """Block until a Lua flow says its window is ready to be captured, by the screenshot it takes then.
+
+    Every reload writes one screenshot as the world loads, and !!DevSmoke writes the flow's own once the flow returns
+    true from its ready check. Both appear after `before`, and the flow's is the later one, so the second new file is
+    the flag the capture waits on: a window filled in from late data is captured after it has filled rather than after
+    a fixed pause (#593). A flow that never signals fails here.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        fresh = []
+        for path in screenshots() - before:
+            try:
+                fresh.append((path.stat().st_mtime, path))
+            except OSError:
+                continue  # the client wrote or rotated it between the glob and the read
+        if len(fresh) >= 2:
+            return max(fresh)[1]
+        time.sleep(1)
+    raise ClientError(
+        f"the flow {action} did not say it was ready to capture within {timeout:.0f} s: a Lua flow signals with the "
+        "screenshot !!DevSmoke takes once its ready check returns true (see wow-forever-addon/in-game.md)"
+    )
+
+
 def parse_flows(values: Sequence[str]) -> list[tuple[str, str]]:
     """`--flow NAME=SLASH_OR_LUA_FILE` entries: a name for the proof and the in-game action that shows it."""
     flows = []
@@ -1081,7 +1293,9 @@ def run_flow(state: Mapping, action: str) -> str | None:
     """Run one proof flow: a Forever addon's own slash command, or a Lua file through !!DevSmoke.
 
     A Lua flow answers the run token its snippet wrote, whose result `check_flow_eval` reads once the screenshot is
-    taken: the reload that saves the result to disk would close the window the flow just opened (#580).
+    taken: the reload that saves the result to disk would close the window the flow just opened (#580). The flow's
+    ready check is polled by !!DevSmoke, whose screenshot then says the window has drawn, so the capture waits for
+    that file instead of a pause (#593).
     """
     if not lua_flow(action):
         slash(state, action)
@@ -1096,8 +1310,12 @@ def run_flow(state: Mapping, action: str) -> str | None:
     except tool.EvalError as error:
         raise ClientError(str(error)) from None
     print(f"wrote {written['chunk']} from {written['snippet']} ({written['lines']} lines)", flush=True)
-    # The snippet runs at login of this reload, so it has run before the flow's screenshot.
+    # The snippet runs at login of this reload. Clearing the inbox afterwards keeps the later reloads a proof makes
+    # from running it again, which would schedule a second ready screenshot the next flow could mistake for its own.
+    before = screenshots()
     reload(state)
+    clear_eval_inbox()
+    wait_for_flow_ready(before, action)
     return written["token"]
 
 

@@ -127,8 +127,25 @@ does not fire on its own in a proof session. Name the flow that shows the change
 (the `SLASH_` globals in its files, such as `/lf` or `/fgf`), or a Lua file through `!!DevSmoke` for anything a chat
 command cannot reach, written as the eval section below shows. Exit 3 means the client is in use (the player's game or
 another session), so nothing was recorded and a later run tries again; exit 1 is a session that stopped before its
-flows ran, and exit 2 is a failure the tool names. `--manual-launcher` is passed through to `up` while launcher OCR is
-not finding Play.
+flows ran, and exit 2 is a failure the tool names.
+
+A Lua flow is captured once it says its window is ready, so a window that fills in from late data is not photographed
+empty (#593). Its snippet may `return` a function; `!!DevSmoke` polls it every 0.25 s, takes the client's own
+screenshot the moment it first returns true, and `proof` waits for that file, up to 60 s, before its capture:
+
+```lua
+-- notice.lua: open the panel, then say when its data has arrived.
+local panel = MyAddon:OpenPanel()
+return function()
+	return panel and #panel.cards > 0
+end
+```
+
+A flow with no ready function is still captured, just after the world load. A ready check that never turns true, or
+that raises, fails the flow on the timeout: nothing is uploaded and `.visual-proof.json` is not written. A slash flow
+keeps its fixed settle, so name a Lua flow for anything that waits on data.
+
+`--manual-launcher` is passed through to `up` while launcher OCR is not finding Play.
 
 `tools/sync_consumer_prs.py` cannot drive the client itself, so for a sync pull request whose changed files need a
 proof it prints this command for the pull request's head, and the release session runs it and commits the result.
@@ -177,7 +194,9 @@ before anything reaches the client. It writes the chunk into the gitignored `!!D
 `!!DevSmoke` checkout, linked into AddOns as the load-on-demand addon of the same name; the snippet's line 1 is the
 generated file's line 2, so an error naming `Eval.lua:6` is snippet line 5. The chunk runs at login and on
 `/devsmoke eval`: what it prints and every value it returns go to the Agent tab in lines under 255 characters and
-into `DevSmokeDB.eval`, and its errors are caught there instead of reaching BugGrabber.
+into `DevSmokeDB.eval`, and its errors are caught there instead of reaching BugGrabber. A function it returns is not
+printed: it is the flow's ready check, polled by `!!DevSmoke`, whose screenshot when it first returns true is what
+`proof` waits for (#593).
 
 The client reads the inbox once per session: the first `/devsmoke eval` or login loads it, and any snippet written
 after that needs `/reload`. `forever_client.py eval` writes the file and reloads, so it always runs the snippet it
@@ -201,8 +220,11 @@ is what tells a result apart from an earlier snippet's (#580). Use eval for anyt
 - Battle.net needs the network, so run the tool outside the agent sandbox; `up` checks Battle.net is reachable
   before it starts anything.
 - The launcher logs in on its own and opens the WoW: Forever page, but ignores the launch it was started with, so
-  until the game starts `up` clicks Play every 15 s (`PLAY_BUTTON`, measured in the launcher window gamescope
-  gives it; a launcher redesign moves it). Enter at the character list enters with the last character. A timeout prints the last frame's path: a login form or an update prompt there needs the player.
+  until the game starts `up` clicks Play every 15 s. Play is located from the flat fill the launcher draws its button
+  in, with the label read inside that button, so the click follows the launcher's own layout (#547). A launcher build
+  that draws another fill needs a fresh `tools/headless/launcher-play.png` for its spec and the `PLAY_FILL` in
+  `tools/headless/forever_client.py` moved with it. Enter at the character list enters with the last character. A
+  timeout prints the last frame's path: a login form or an update prompt there needs the player.
 
 ## Scope
 

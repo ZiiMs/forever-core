@@ -252,6 +252,66 @@ local function pack(...)
 	return { n = select("#", ...), ... }
 end
 
+-- A proof captures a Lua flow's window only once the flow says it is ready: a snippet may return a function, polled
+-- here the way the client polls a timer, and the screenshot taken when it first returns true is the file the proof
+-- waits for (#593). It is delayed past the screenshot every world load takes, so the two files never share a name in
+-- the Screenshots folder, and a flow with no ready check is captured at that same point.
+local FLOW_SHOT_DELAY = 3.2
+local FLOW_POLL = 0.25
+local FLOW_READY_LIMIT = 120
+local flowWorldLoaded = false
+local flowWaiting = {}
+
+local function flowWorldReady()
+	flowWorldLoaded = true
+	local waiting = flowWaiting
+	flowWaiting = {}
+	for _, callback in ipairs(waiting) do
+		callback()
+	end
+end
+
+local flowWorld = CreateFrame("Frame")
+flowWorld:RegisterEvent("PLAYER_ENTERING_WORLD")
+flowWorld:SetScript("OnEvent", flowWorldReady)
+
+local function captureFlow(ready)
+	local finished = false
+	local deadline
+	local function stop(message)
+		finished = true
+		say("Dev Smoke: " .. message)
+	end
+	local function poll()
+		if finished then
+			return
+		end
+		local ok, value = true, true
+		if type(ready) == "function" then
+			ok, value = pcall(ready)
+		end
+		if not ok then
+			stop("the flow's ready check failed: " .. textOf(value))
+		elseif value then
+			finished = true
+			Screenshot()
+		elseif debugprofilestop() > deadline then
+			stop(("the flow was not ready to capture within %d s"):format(FLOW_READY_LIMIT))
+		else
+			C_Timer.After(FLOW_POLL, poll)
+		end
+	end
+	local function armed()
+		deadline = debugprofilestop() + FLOW_READY_LIMIT * 1000
+		C_Timer.After(FLOW_SHOT_DELAY, poll)
+	end
+	if flowWorldLoaded then
+		armed()
+	else
+		flowWaiting[#flowWaiting + 1] = armed
+	end
+end
+
 -- The eval inbox: tools/devsmoke/eval.py writes a snippet as the generated !!DevSmokeInbox addon, whose Eval.lua
 -- defines DevSmokeEval. Running it here, under xpcall with print captured, keeps an agent's mistake out of BugGrabber
 -- and puts every line it prints or returns on the Agent tab and in DevSmokeDB.eval.
@@ -282,10 +342,16 @@ local function runEval()
 		returns = pack(chunk())
 	end, capture)
 	_G.print = original
+	local ready
 	local err
 	if ok then
 		for index = 1, returns.n do
-			pushLines(returns[index], lines)
+			local value = returns[index]
+			if type(value) == "function" and ready == nil then
+				ready = value
+			else
+				pushLines(value, lines)
+			end
 		end
 	else
 		err = ("%s\n%s"):format(message or "error", debugstack())
@@ -296,6 +362,9 @@ local function runEval()
 	say(("Dev Smoke: eval %s, %d lines"):format(ok and "ok" or "failed", #lines))
 	for _, line in ipairs(lines) do
 		say(line)
+	end
+	if ok then
+		captureFlow(ready)
 	end
 end
 

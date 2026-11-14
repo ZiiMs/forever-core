@@ -49,6 +49,13 @@ _G.print = function(...)
 	chat[#chat + 1] = ...
 end
 
+-- The client's Screenshot(): a proof flow's ready check arms one, and the file it writes is what the capture waits
+-- for. The spec counts the calls rather than writing images.
+local screenshots = 0
+_G.Screenshot = function()
+	screenshots = screenshots + 1
+end
+
 _G.CreateFrame = function(kind)
 	local frame = { kind = kind, events = {}, scripts = {} }
 	function frame:RegisterEvent(event)
@@ -681,6 +688,32 @@ equal(
 	"Dev Smoke: /devsmoke, tab [off], versions, errors, eval, thanks <addon> [player], prof <tab>, close",
 	"the usage lists every command"
 )
+
+-- A Lua flow says when its window is ready to be captured (#593): a returned function is polled, and the client's
+-- own screenshot when it turns true is the file `proof` waits for before its capture.
+local polls = 0
+DevSmokeEvalRun = "run-ready"
+DevSmokeEval = function()
+	return function()
+		polls = polls + 1
+		return polls >= 2
+	end
+end
+local readyLines = command("eval")
+equal(#readyLines, 1, "a ready function is a signal, not a printed value")
+equal(screenshots, 0, "nothing is captured before the world has loaded")
+fire("PLAYER_ENTERING_WORLD")
+drain()
+equal(polls, 2, "the flow is polled until its ready check is true")
+equal(screenshots, 1, "the ready flow takes the screenshot the proof waits for")
+
+-- A flow with no ready check is still captured, after the world load's own screenshot.
+DevSmokeEval = function()
+	return "plain"
+end
+command("eval")
+drain()
+equal(screenshots, 2, "a flow without a ready check is captured once the world is up")
 
 -- /devsmoke eval runs the chunk the generated !!DevSmokeInbox addon defines: what it prints and every value it
 -- returns reach the Agent tab and DevSmokeDB.eval, and an error is caught there instead of reaching BugGrabber. The

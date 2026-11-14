@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -391,6 +392,21 @@ class ForeverClientTest(unittest.TestCase):
             ],
         )
 
+    def test_reload_waits_only_for_a_screenshot_taken_after_the_command_was_sent(self):
+        earlier = self.state / "earlier.jpg"
+        present = set()
+
+        def typed(_state, _command):
+            present.add(earlier)  # a screenshot an earlier flow left lands while the command is typed
+
+        with (
+            mock.patch.object(fc, "screenshots", side_effect=lambda: set(present)),
+            mock.patch.object(fc, "slash", side_effect=typed),
+            mock.patch.object(fc, "wait_for_world", return_value=earlier) as wait,
+        ):
+            fc.reload({})
+        self.assertIn(earlier, wait.call_args.args[0], "it cannot pass as this reload's world load")
+
     def test_key_sends_only_ui_keys(self):
         with mock.patch.object(fc, "x") as x, self.assertRaisesRegex(fc.ClientError, "refused w"):
             fc.press({}, ["Escape", "w"])
@@ -399,17 +415,16 @@ class ForeverClientTest(unittest.TestCase):
     def test_press_play_clicks_the_screenshot_bound_play_label(self):
         state = {"display": ":1"}
         found = mock.Mock(stdout="12345\n")
-        tsv = "level\tpage\tblock\tpar\tline\tword\tleft\ttop\twidth\theight\tconf\ttext\n"
-        tsv += "5\t1\t1\t1\t1\t1\t1390\t580\t72\t24\t96.5\tPlay\n"
-        ocr = mock.Mock(returncode=0, stdout=tsv, stderr="")
         with (
-            mock.patch.object(fc.subprocess, "run", side_effect=[found, ocr]),
+            mock.patch.object(fc.subprocess, "run", side_effect=[found]),
             mock.patch.object(fc.shutil, "which", return_value="/usr/bin/tesseract"),
             mock.patch.object(fc, "shot", return_value=self.state / "launcher.png"),
+            mock.patch.object(fc, "play_targets", return_value=[(1390, 580, 72, 24, 96.5)]) as targets,
             mock.patch.object(fc, "x") as x,
             mock.patch.object(fc.time, "sleep"),
         ):
             fc.press_play(state)
+        targets.assert_called_once_with(self.state / "launcher.png")
         self.assertEqual(
             x.call_args_list,
             [
@@ -423,11 +438,11 @@ class ForeverClientTest(unittest.TestCase):
     def test_press_play_waits_for_a_loading_launcher_without_clicking(self):
         state = {"display": ":1"}
         found = mock.Mock(stdout="12345\n")
-        ocr = mock.Mock(returncode=0, stdout="header\n", stderr="")
         with (
-            mock.patch.object(fc.subprocess, "run", side_effect=[found, ocr, found, ocr]),
+            mock.patch.object(fc.subprocess, "run", side_effect=[found, found]),
             mock.patch.object(fc.shutil, "which", return_value="/usr/bin/tesseract"),
             mock.patch.object(fc, "shot", return_value=self.state / "launcher.png"),
+            mock.patch.object(fc, "play_targets", return_value=[]),
             mock.patch.object(fc, "x") as x,
             contextlib.redirect_stderr(io.StringIO()) as warning,
         ):
@@ -480,17 +495,39 @@ class ForeverClientTest(unittest.TestCase):
     def test_press_play_refuses_ambiguous_ocr_targets(self):
         state = {"display": ":1"}
         found = mock.Mock(stdout="12345\n")
-        row = "5\t1\t1\t1\t1\t1\t100\t100\t40\t20\t90\tPlay\n"
-        ocr = mock.Mock(returncode=0, stdout="header\n" + row + row, stderr="")
+        targets = [(100, 100, 40, 20, 90.0), (300, 300, 40, 20, 90.0)]
         with (
-            mock.patch.object(fc.subprocess, "run", side_effect=[found, ocr]),
+            mock.patch.object(fc.subprocess, "run", side_effect=[found]),
             mock.patch.object(fc.shutil, "which", return_value="/usr/bin/tesseract"),
             mock.patch.object(fc, "shot", return_value=self.state / "launcher.png"),
+            mock.patch.object(fc, "play_targets", return_value=targets),
             mock.patch.object(fc, "x") as x,
             self.assertRaisesRegex(fc.ClientError, "expected one visible Play target"),
         ):
             fc.press_play(state)
         x.assert_not_called()
+
+    def test_the_saved_launcher_frame_draws_the_play_button_as_its_own_region(self):
+        fixture = Path(__file__).parent / "headless/launcher-play.png"
+        width, height, channels, rows = fc.png_pixels(fixture)
+        self.assertEqual((width, height, channels), (380, 190, 3), "the saved frame is the cropped launcher page")
+        regions = fc.fill_regions(width, height, channels, rows)
+        self.assertEqual(
+            regions[0][1:],
+            (71, 100, 232, 56),
+            "the largest fill the launcher draws is the Play button, not the gear drawn beside it",
+        )
+        self.assertGreaterEqual(regions[1][1], 71 + 232, "the gear is the next region, to the right of Play")
+
+    @unittest.skipUnless(shutil.which("tesseract"), "needs tesseract to read the saved launcher frame")
+    def test_the_play_label_is_read_inside_the_button_the_launcher_draws(self):
+        fixture = Path(__file__).parent / "headless/launcher-play.png"
+        targets = fc.play_targets(fixture)
+        self.assertEqual(len(targets), 1, "the saved frame holds one Play button")
+        left, top, width, height, confidence = targets[0]
+        self.assertGreaterEqual(confidence, 0)
+        self.assertTrue(71 <= left and left + width <= 71 + 232, f"the label {left}..{left + width} is in the button")
+        self.assertTrue(100 <= top and top + height <= 100 + 56, f"the label {top}..{top + height} is in the button")
 
     def test_character_select_nudge_waits_while_the_launcher_has_focus(self):
         state = {"display": ":1"}
@@ -1578,18 +1615,53 @@ class ProofHelpersTest(unittest.TestCase):
             "token": "run-1",
         }
         tool.EvalError = Exception
+        earlier = {self.state / "earlier.jpg"}
         with (
             mock.patch.object(fc, "CLIENT", self.state / "client"),
             mock.patch.object(fc, "devsmoke_eval", return_value=tool),
+            mock.patch.object(fc, "screenshots", return_value=earlier),
             mock.patch.object(fc, "reload") as reload,
+            mock.patch.object(fc, "clear_eval_inbox") as clear,
+            mock.patch.object(fc, "wait_for_flow_ready") as ready,
             mock.patch.object(fc, "saved_eval") as saved,
             contextlib.redirect_stdout(io.StringIO()) as out,
         ):
             self.assertEqual(fc.run_flow("state", "notice.lua"), "run-1")
         reload.assert_called_once_with("state")
+        clear.assert_called_once_with()
+        ready.assert_called_once_with(earlier, "notice.lua")
         saved.assert_not_called()  # the result is read after the flow's screenshot
         tool.write_snippet.assert_called_once_with(Path("notice.lua"), addons=self.state / "client/Interface/AddOns")
         self.assertIn("wrote /x/!!DevSmokeInbox/Eval.lua from notice.lua (3 lines)", out.getvalue())
+
+    def test_a_lua_flow_waits_for_the_world_and_its_own_screenshot(self):
+        earlier = self.state / "0-earlier.jpg"
+        world = self.state / "1-world.jpg"
+        flow = self.state / "2-flow.jpg"
+        for index, path in enumerate((earlier, world, flow)):
+            path.write_bytes(b"image")
+            os.utime(path, (100 + index, 100 + index))
+        clock = FakeClock()
+        with (
+            mock.patch.object(fc, "screenshots", return_value={earlier, world, flow}),
+            mock.patch.object(fc.time, "monotonic", clock.monotonic),
+            mock.patch.object(fc.time, "sleep", clock.sleep),
+        ):
+            self.assertEqual(fc.wait_for_flow_ready({earlier}, "notice.lua"), flow)
+
+    def test_a_lua_flow_that_never_signals_fails_on_the_timeout(self):
+        world = self.state / "1-world.jpg"
+        world.write_bytes(b"world")
+        os.utime(world, (100, 100))
+        clock = FakeClock()
+        with (
+            mock.patch.object(fc, "screenshots", return_value={world}),
+            mock.patch.object(fc.time, "monotonic", clock.monotonic),
+            mock.patch.object(fc.time, "sleep", clock.sleep),
+            self.assertRaisesRegex(fc.ClientError, r"notice\.lua did not say it was ready to capture"),
+        ):
+            fc.wait_for_flow_ready(set(), "notice.lua", timeout=5)
+        self.assertEqual(clock.now, 5)
 
     def test_check_flow_eval_fails_on_the_error_its_own_snippet_raised(self):
         saved = {"run": "run-1", "ran": 7, "ok": False, "out": {1: "before"}, "err": "boom\nstack"}
@@ -1860,6 +1932,7 @@ class ProofTest(unittest.TestCase):
             mock.patch.object(fc, "addon_folders", return_value=[("LegacyForever", self.build)]),
             mock.patch.object(fc, "up", up or self.up),
             mock.patch.object(fc, "reload", self.reload),
+            mock.patch.object(fc, "wait_for_flow_ready", return_value=self.state / "flow.jpg"),
             mock.patch.object(fc, "slash", side_effect=self.fake_slash),
             mock.patch.object(fc, "shot", side_effect=self.fake_shot),
             mock.patch.object(fc, "proof_digests", self.proof_digests),

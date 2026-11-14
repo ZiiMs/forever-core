@@ -133,6 +133,7 @@ files["tools/devsmoke/"] = {
 		"C_AddOns",
 		"DevSmokeEval",
 		"DevSmokeEvalRun",
+		"Screenshot",
 	},
 	globals = { "DevSmokeDB", "SLASH_DEVSMOKE1" },
 }

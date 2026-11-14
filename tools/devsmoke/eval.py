@@ -16,7 +16,9 @@ The generated `Eval.lua` is one wrapper line, the snippet verbatim, and the clos
 The snippet's line 1 is the generated file's line 2, so an error naming `Eval.lua:6` is its line 5. !!DevSmoke runs
 the chunk under `xpcall` at login and on `/devsmoke eval`: what it prints and every value it returns go to the Agent
 tab in lines under 255 characters, and the same lines land in `DevSmokeDB.eval.out`, with `err` holding the error and
-its stack. Nothing reaches BugGrabber.
+its stack. Nothing reaches BugGrabber. A function the snippet returns is not printed: it is the flow's ready check,
+which !!DevSmoke polls until it is true, when the screenshot it takes is what `forever_client.py proof` waits for
+(#593).
 
 `TOKEN` is a fresh run token for every write, which !!DevSmoke copies into `DevSmokeDB.eval.run`. SavedVariables reach
 disk only at the next reload or logout, so the file a reader opens still holds an earlier session's eval: the token is
