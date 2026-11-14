@@ -24,21 +24,32 @@ local L = ns.L
 ---@type (fun())?
 local apply
 
+-- The runtime store when Core.lua publishes one; an older consumer's spec can still supply ForeverCoreDB directly.
+---@return table?
+local function Database()
+	if type(ns.Store) == "function" then
+		return ns.Store()
+	end
+	return ForeverCoreDB
+end
+
 ---@return boolean
 local function Enabled()
-	return type(ForeverCoreDB) == "table" and ForeverCoreDB.questList == true
+	local db = Database()
+	return type(db) == "table" and db.questList == true
 end
 
 ---@param value boolean
 local function SetEnabled(value)
 	value = not not value
-	if type(ForeverCoreDB) ~= "table" then
-		ForeverCoreDB = {}
-	end
-	if ForeverCoreDB.questList == value then
+	local db = Database()
+	if type(db) ~= "table" then
 		return
 	end
-	ForeverCoreDB.questList = value
+	if db.questList == value then
+		return
+	end
+	db.questList = value
 	if apply then
 		apply()
 	end
@@ -188,15 +199,16 @@ local function CharacterKey()
 end
 
 -- One character's folded quests and zones, made on first read so the table shape is always there.
----@return table
+---@return table?
 local function CharacterState()
-	if type(ForeverCoreDB) ~= "table" then
-		ForeverCoreDB = {}
+	local db = Database()
+	if type(db) ~= "table" then
+		return nil
 	end
-	local all = ForeverCoreDB.questListFold
+	local all = db.questListFold
 	if type(all) ~= "table" then
 		all = {}
-		ForeverCoreDB.questListFold = all
+		db.questListFold = all
 	end
 	local key = CharacterKey()
 	local state = all[key]
@@ -217,26 +229,32 @@ end
 ---@return boolean
 local function IsQuestFolded(questID)
 	local state = CharacterState()
-	return state.quests[questID] == true
+	return state ~= nil and state.quests[questID] == true
 end
 
 ---@param questID number
 ---@param folded boolean
 local function SetQuestFolded(questID, folded)
-	CharacterState().quests[questID] = folded or nil
+	local state = CharacterState()
+	if state ~= nil then
+		state.quests[questID] = folded or nil
+	end
 end
 
 ---@param zone string
 ---@return boolean
 local function IsZoneFolded(zone)
 	local state = CharacterState()
-	return state.zones[zone] == true
+	return state ~= nil and state.zones[zone] == true
 end
 
 ---@param zone string
 ---@param folded boolean
 local function SetZoneFolded(zone, folded)
-	CharacterState().zones[zone] = folded or nil
+	local state = CharacterState()
+	if state ~= nil then
+		state.zones[zone] = folded or nil
+	end
 end
 
 ---@param questID number
