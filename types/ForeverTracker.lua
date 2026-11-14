@@ -171,6 +171,7 @@
 ---@field TrackerOrder? ForeverTrackerOrderAPI
 ---@field TrackerQuestie? ForeverTrackerQuestie
 ---@field TrackerEllesmere? ForeverTrackerEllesmere
+---@field TrackerKaliels? ForeverTrackerKaliels
 ---@field TrackerEqot? ForeverTrackerEqot
 ---@field TrackerHostSettings? fun(): ForeverTrackerSettings
 ---@field AttachCoreDb? fun()

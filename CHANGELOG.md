@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- **Forever tracker sections follow Kaliel's Tracker.** They sit below its visible quest list and follow its font and collapse controls. Thanks to kowakowa93 for the contribution (#602).
+- **Tracker rows keep their full width and quest item art.** Long headers fit the section width, and scrolling leaves room for quest markers and item buttons. Thanks to xh43k for the report (#603).
+
+- Embedded core copies retain shared settings and histories across host removal, thanks to cotijelucie for the report.
+  Consumer packaging must adopt embedded copies before installations use this runtime path. (#448)
+- `/fcore report` lists installed Forever addons, their dependency and load status, and captured startup errors even
+  when an addon's own report command did not register. (#509)
+
 ## [1.12.1] - 2026-11-14
 
 - **The Professions tab of your Forever addons no longer hides under another addon's tab.** If another addon also put

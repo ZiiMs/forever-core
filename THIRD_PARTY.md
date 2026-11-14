@@ -45,6 +45,9 @@ One row per shipped contribution: a player with five shipped items has five rows
 
 | Who | What | Notes |
 |---|---|---|
+| [kowakowa93](https://github.com/kowakowa93) | Forever sections follow Kaliel's Tracker | Contributor integration branch; #602 |
+| xh43k | Reported clipped tracker rows and quest item art | CurseForge; thread 8715086; #603 |
+| cotijelucie | Shared settings retained across embedded core copies | Reported uninstalling a bundled core on Discord; #448 |
 | [iPulse](https://github.com/iPulse) | Forever sections under the objective tracker | Asked on CurseForge (#335) |
 | _spada | Hide a tracker section from its menu | Asked on Discord (#292) |
 | Darkwavez76 | A darker tracker background | Asked on CurseForge (#241) |

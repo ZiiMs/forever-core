@@ -236,6 +236,8 @@ files["Locales/*.lua"] = { max_line_length = false }
 -- ForeverCore: the shared files publish these globals, and Core.lua's saved table.
 globals[#globals + 1] = "ForeverCore"
 globals[#globals + 1] = "ForeverCoreDB"
+-- Core/Loader.lua: the schema 1 registry every embedded ForeverCore copy shares.
+globals[#globals + 1] = "ForeverCoreLoader"
 -- Core/MinimapButton.lua says why a button was skipped when the client has no Minimap.
 read_globals[#read_globals + 1] = "DEFAULT_CHAT_FRAME"
 globals[#globals + 1] = "SLASH_FOREVERCORE1"
