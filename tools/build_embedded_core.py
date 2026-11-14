@@ -14,6 +14,7 @@ directly rather than wait for its already-finished ADDON_LOADED event.
 import argparse
 import hashlib
 import json
+import posixpath
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
@@ -202,6 +203,111 @@ def plan(
         )
         + "\n"
     ).encode()
+    return output
+
+
+def compose_bundle(
+    core_files: dict[str, bytes], consumer_files: dict[str, bytes], consumer_toc: bytes
+) -> dict[str, bytes]:
+    """Compose an embedded plan with the consumer's explicit files and final TOC."""
+    prefix = "Libs/ForeverCore/"
+    manifest_name = prefix + "bundle.json"
+    manifest = json.loads(core_files[manifest_name])
+    if manifest["standalone"]:
+        raise ValueError("composition requires an embedded plan")
+    toc_name = manifest["folder"] + ".toc"
+    replaceable = {toc_name, "LICENSE", "THIRD_PARTY.md"}
+
+    def safe(name):
+        if (
+            not name
+            or "\\" in name
+            or ":" in name
+            or "\0" in name
+            or name.startswith("/")
+            or any(p in ("", ".", "..") for p in name.split("/"))
+        ):
+            raise ValueError(f"unsafe or aliased bundle path: {name}")
+        return name
+
+    names = {}
+    for name in list(core_files) + list(consumer_files):
+        safe(name)
+        parts = name.split("/")
+        for length in range(1, len(parts) + 1):
+            component = "/".join(parts[:length])
+            folded = component.casefold()
+            if folded in names and names[folded] != component:
+                raise ValueError(f"aliased bundle path: {name}")
+            names[folded] = component
+    all_files = set(core_files) | set(consumer_files)
+    for name in all_files:
+        if any("/".join(name.split("/")[:i]) in all_files for i in range(1, len(name.split("/")))):
+            raise ValueError(f"file/directory collision: {name}")
+    for name in consumer_files:
+        if name not in replaceable and (
+            name in core_files
+            or name.casefold().startswith(prefix.casefold())
+            or name.casefold() == "forevercoreready.lua"
+            or name.lower().endswith(".toc")
+        ):
+            raise ValueError(f"protected consumer collision: {name}")
+    if toc_name in consumer_files and consumer_files[toc_name] != consumer_toc:
+        raise ValueError("consumer TOC bytes disagree")
+
+    def loads(data):
+        return [
+            safe(line.strip().replace("\\", "/"))
+            for line in data.decode().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+    canonical = loads(core_files[toc_name])
+    declared = loads(consumer_toc)
+    core_loads = canonical[:-1]
+    if (
+        canonical[-1] != "ForeverCoreReady.lua"
+        or declared[: len(core_loads)] != core_loads
+        or not declared
+        or declared[-1] != "ForeverCoreReady.lua"
+        or len(set(declared)) != len(declared)
+    ):
+        raise ValueError("TOC requires canonical core order and ready exactly once last")
+    graph = declared[len(core_loads) : -1]
+    seen = set()
+
+    def visit(name):
+        if name not in consumer_files or name in replaceable:
+            raise ValueError(f"missing or foreign consumer resource: {name}")
+        if name in seen:
+            raise ValueError(f"duplicate consumer load: {name}")
+        seen.add(name)
+        if name.lower().endswith(".xml"):
+            for element in ET.fromstring(consumer_files[name]).iter():
+                resource = element.get("file")
+                if resource is None:
+                    continue
+                resource = resource.replace("\\", "/")
+                if resource.startswith("/") or ":" in resource:
+                    raise ValueError(f"foreign consumer resource: {resource}")
+                resolved = safe(posixpath.normpath(posixpath.join(posixpath.dirname(name), resource)))
+                if resolved.lower().endswith((".lua", ".xml")):
+                    visit(resolved)
+                elif resolved not in consumer_files:
+                    raise ValueError(f"missing consumer resource: {resolved}")
+
+    for name in graph:
+        if not name.lower().endswith((".lua", ".xml")):
+            raise ValueError(f"unexplained TOC load: {name}")
+        visit(name)
+    unexplained = {name for name in consumer_files if name.lower().endswith((".lua", ".xml"))} - seen
+    if unexplained:
+        raise ValueError(f"unexplained consumer loads: {sorted(unexplained)}")
+    output = {**core_files, **consumer_files, toc_name: consumer_toc}
+    manifest["files"] = {
+        name: hashlib.sha256(data).hexdigest() for name, data in sorted(output.items()) if name != manifest_name
+    }
+    output[manifest_name] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     return output
 
 

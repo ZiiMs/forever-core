@@ -1,5 +1,6 @@
 """Focused producer and generated-load-graph integration checks."""
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -7,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from build_embedded_core import check_bundle, plan, release_build, write_bundle
+from build_embedded_core import check_bundle, compose_bundle, plan, release_build, write_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / "tools" / ".cache"
@@ -35,6 +36,78 @@ def reordered_source(destination, files):
 
 
 class GeneratedBundleTests(unittest.TestCase):
+    def test_composition_contract(self):
+        core = plan(ROOT, "ConsumerA", "1.12.1", "ConsumerADB", ENTRY)
+        toc = core["ConsumerA.toc"].replace(b"ForeverCoreReady.lua", b"UI/Main.xml\nConsumer.lua\nForeverCoreReady.lua")
+        consumer = {
+            "LICENSE": b"consumer licence",
+            "THIRD_PARTY.md": b"consumer notices",
+            "Consumer.lua": b"-- deferred consumer",
+            "UI/Main.xml": b'<Ui><Script file="Early.lua"/><Texture file="../media/icon.tga"/></Ui>',
+            "UI/Early.lua": b"-- eager consumer",
+            "media/icon.tga": b"pixels",
+        }
+        files = compose_bundle(core, consumer, toc)
+        manifest_name = "Libs/ForeverCore/bundle.json"
+        before, after = json.loads(core[manifest_name]), json.loads(files[manifest_name])
+        self.assertEqual(
+            {k: v for k, v in before.items() if k != "files"}, {k: v for k, v in after.items() if k != "files"}
+        )
+        self.assertEqual(
+            after["files"], {n: hashlib.sha256(b).hexdigest() for n, b in files.items() if n != manifest_name}
+        )
+        for name, data in core.items():
+            if name not in (manifest_name, "ConsumerA.toc", "LICENSE", "THIRD_PARTY.md"):
+                self.assertEqual(files[name], data)
+        for name in (
+            "ForeverCoreReady.lua",
+            "Libs/ForeverCore/End.lua",
+            "Libs/ForeverCore/new.lua",
+            "Nested/Other.toc",
+            "../escape",
+            "/absolute",
+            "./alias",
+            "a//b",
+            "C:/escape",
+            "media/ICON.tga",
+            "MEDIA/other.tga",
+            "Libs/ForeverCore",
+        ):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                compose_bundle(core, dict(consumer, **{name: b"bad"}), toc)
+        lines = toc.splitlines()
+        first = lines.index(b"Libs\\ForeverCore\\Core\\Loader.lua")
+        lines[first], lines[first + 1] = lines[first + 1], lines[first]
+        for bad in (
+            b"\n".join(lines) + b"\n",
+            toc.replace(b"Libs\\ForeverCore\\Begin.lua", b""),
+            toc.replace(b"Consumer.lua", b"Missing.lua"),
+            toc.replace(b"Consumer.lua", b"Consumer.lua\nConsumer.lua"),
+            toc.replace(b"ForeverCoreReady.lua", b"ForeverCoreReady.lua\nConsumer.lua"),
+            toc.replace(b"Libs\\ForeverCore\\Begin.lua", b"Libs\\ForeverCore\\End.lua"),
+        ):
+            with self.subTest(toc=bad), self.assertRaises(ValueError):
+                compose_bundle(core, consumer, bad)
+        with self.assertRaises(ValueError):
+            compose_bundle(core, {**consumer, "Unused.lua": b"-- unexplained"}, toc)
+        with self.assertRaises(ValueError):
+            compose_bundle(core, {**consumer, "UI/Main.xml": b'<Ui><Script file="Missing.lua"/></Ui>'}, toc)
+        with tempfile.TemporaryDirectory(prefix="composed-gate-", dir=CACHE) as directory:
+            package = Path(directory) / "ConsumerA"
+            write_bundle(package, files)
+            check_bundle(package, files)
+            target = package / "Consumer.lua"
+            target.write_bytes(b"modified")
+            with self.assertRaisesRegex(ValueError, "bytes differ"):
+                check_bundle(package, files)
+            target.unlink()
+            with self.assertRaisesRegex(ValueError, "missing="):
+                check_bundle(package, files)
+            target.write_bytes(files["Consumer.lua"])
+            (package / "extra").write_bytes(b"extra")
+            with self.assertRaisesRegex(ValueError, "extra="):
+                check_bundle(package, files)
+
     def test_source_order_identity_and_artifact_gate(self):
         original = plan(ROOT, "ConsumerA", "1.12.1", "ConsumerADB", ENTRY)
         with tempfile.TemporaryDirectory(prefix="embedded-order-", dir=CACHE) as directory:
