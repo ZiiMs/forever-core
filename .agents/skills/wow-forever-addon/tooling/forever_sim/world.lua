@@ -38,6 +38,7 @@ function M.build(sim)
 		professions = {}, -- { skillLineID, name, skill, max, modifier, icon, recipes = {...}, categories = {...} }
 		openProfession = nil,
 		items = {},
+		knownSpells = {}, -- learned spell IDs; cached spell data in spells does not imply knowledge
 		maps = {},
 		addons = {},
 		achievements = { categories = {} },
@@ -478,6 +479,26 @@ function M.build(sim)
 		end
 		local r = recipe(id)
 		return r and { name = r.name, icon = r.icon or 134400 }
+	end
+	-- Flyout definitions exist before their spells are learned. Blizzard's class action button enumerates
+	-- these slots at PLAYER_LOGIN even when none are known; an unknown flyout ID still returns nothing.
+	G.GetFlyoutInfo = function(id)
+		local flyout = sim.flyouts[Secret.unwrap(id)]
+		if flyout then
+			local known = false
+			for _, spellID in ipairs(flyout.slots) do
+				known = known or W.knownSpells[spellID] == true
+			end
+			return flyout.name, flyout.description, #flyout.slots, known
+		end
+	end
+	G.GetFlyoutSlotInfo = function(id, index)
+		local flyout = sim.flyouts[Secret.unwrap(id)]
+		local spellID = flyout and flyout.slots[Secret.unwrap(index)]
+		if spellID then
+			local info = spell(spellID)
+			return spellID, spellID, W.knownSpells[spellID] == true, info and info.name
+		end
 	end
 	impl["C_Spell.DoesSpellExist"] = function(id)
 		return spell(id) ~= nil
