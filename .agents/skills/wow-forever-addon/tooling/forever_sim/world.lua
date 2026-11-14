@@ -200,6 +200,26 @@ function M.build(sim)
 	impl.GetMoney = function()
 		return W.player.money
 	end
+	-- Legacy globals used by the pinned Camelot FriendsFrame and MailFrame. Scenarios start with
+	-- no Battle.net session and an empty mail draft; return the API's individual tuple fields.
+	W.battleNet = { enabled = false, connected = false, afk = false, dnd = false, realIDEnabled = false }
+	W.mail = { sendPrice = 30 }
+	impl.BNFeaturesEnabled = function()
+		return W.battleNet.enabled
+	end
+	impl.BNConnected = function()
+		return W.battleNet.connected
+	end
+	impl.BNFeaturesEnabledAndConnected = function()
+		return W.battleNet.enabled and W.battleNet.connected
+	end
+	impl.BNGetInfo = function()
+		local b = W.battleNet
+		return b.presenceID, b.battleTag, b.toonID, b.broadcast or "", b.afk, b.dnd, b.realIDEnabled
+	end
+	impl.GetSendMailPrice = function()
+		return W.mail.sendPrice
+	end
 	impl.IsPlayerInWorld = function()
 		return sim.loggedIn == true
 	end

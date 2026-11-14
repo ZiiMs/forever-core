@@ -32,6 +32,8 @@ Sim.CORE = {
 	"Blizzard_SharedXML",
 	"Blizzard_SharedXMLGame",
 	"Blizzard_FrameXMLBase",
+	-- FriendsFrame reads the social utility mixins even when the full social panel is not loaded.
+	"Blizzard_SocialUIShared/SocialUIUtil.lua",
 	"Blizzard_UIParent",
 	"Blizzard_UIErrorsFrame",
 	"Blizzard_StaticPopup",

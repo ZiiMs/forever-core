@@ -371,7 +371,11 @@ function M.build(sim)
 		elseif t == "boolean" then
 			v = v == "true"
 		elseif t == "global" then
-			v = G[v]
+			local value = G
+			for part in v:gmatch("[^%.]+") do
+				value = value and value[part]
+			end
+			v = value
 		end
 		local k = kv.attr.key
 		if kv.attr.keyType == "number" then
