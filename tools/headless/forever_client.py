@@ -143,7 +143,6 @@ NVIDIA_MISMATCH = "driver/library version mismatch"
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "forever-client"
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "forever-client/env.json"
 ADDON = Path(__file__).resolve().parent / "!!ForeverHeadless"
-CHARACTER_PREFLIGHT = Path(__file__).resolve().parent / "character_preflight.lua"
 WIDTH, HEIGHT = 1920, 1080
 MAX_SESSION = 30 * 60
 WAIT_POLL = 1.0  # how often a `--wait` queue checks the lock and the Wine prefix
@@ -2114,10 +2113,8 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
         state["ready"] = time.time()
         state_file().write_text(json.dumps(state))
         print(f"READY in the world after {time.time() - started:.0f} s ({ready.name})", flush=True)
-        # The preflight is itself a ready-gated flow.  run_flow waits for its capture, and a thrown
-        # check never produces that capture, so reading its SavedVariables would only force another
-        # reload before the caller's first proof.
-        run_flow(state, str(CHARACTER_PREFLIGHT))
+        # !!ForeverHeadless performs the parked-character preflight before its ordinary readiness screenshot.
+        # No eval or reload is needed here: wait_for_world only returns after that handshake succeeds.
         print("CHARACTER_PREFLIGHT passed", flush=True)
         if after_ready:
             return after_ready(state)
