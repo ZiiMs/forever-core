@@ -305,6 +305,23 @@ scroll.check(capped.updates == frozenUpdates + 1, "combat ending runs the deferr
 capped:OnTrackerWheel(-1)
 scroll.check(capped.scrollOffset == 210, "the wheel moves again after combat")
 
+-- Content frames receive wheel input directly, so the host hooks them without replacing their own handlers.
+local wheelChild = scroll.env.CreateFrame("Button")
+local childWheelCalls = 0
+wheelChild:SetScript("OnMouseWheel", function()
+	childWheelCalls = childWheelCalls + 1
+end)
+capped.ContentsFrame.GetChildren = function()
+	return wheelChild
+end
+capped.count = 10
+capped.scrollOffset = 0
+scroll.host:MarkDirty()
+scroll.drain()
+wheelChild.scripts.OnMouseWheel(wheelChild, -1)
+scroll.check(childWheelCalls == 1, "content wheel handlers remain installed")
+scroll.check(capped.scrollOffset == 60, "wheel input over content scrolls the owning section")
+
 -- A list that shrinks below its cap goes back to the top through the one setter, so the scroll child and the item
 -- buttons see the new view instead of keeping the old one.
 local scrollChanges = capped.scrollChanges
@@ -323,5 +340,22 @@ scroll.host:MarkDirty()
 scroll.drain()
 scroll.check(capped.available > 0 and rest.available == 0, "constrained layout gives the remaining section no sliver")
 scroll.check(capped:GetHeight() + rest:GetHeight() <= 100, "constrained layout keeps section geometry within the room")
+
+-- Two overflowing sections must reserve the later section's measured first block before spending the remaining room.
+-- The first pass records the native metrics; the constrained pass then has 200 units, enough for two 75-unit floors
+-- and the inter-section gap. The old allocator spent the whole cap on the first section and left the second below its
+-- usable floor.
+local floors = harness.new({ headerShown = true })
+floors.first.contentHeight, floors.second.contentHeight = 0, 0
+local tall = floors.scrollModule(3, 10, 40)
+local later = floors.scrollModule(4, 2, 40)
+floors.host:MarkDirty()
+floors.drain()
+floors.drain()
+floors.native.NineSlice.bottom = 240
+floors.host:MarkDirty()
+floors.drain()
+floors.check(tall.available >= 75 and later.available >= 75, "measured floors fit across multiple sections")
+floors.check(tall:GetHeight() + later:GetHeight() + 10 <= 220, "floor allocation keeps the constrained column bounded")
 
 print("tracker_host_spec: " .. (t.checks() + asideChecks + scroll.checks()) .. " checks passed")

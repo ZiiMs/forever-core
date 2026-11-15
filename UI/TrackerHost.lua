@@ -636,6 +636,25 @@ local function HorizontalOverflow(contents, width)
 	return origin - left, right - origin - width
 end
 
+-- Mouse-wheel input is delivered to the deepest mouse-enabled descendant, not bubbled to its scroll frame. Keep the
+-- existing descendant handlers, but hook every pooled content frame so scrolling works over text, icons and buttons.
+local function BindTrackerWheel(frame, handler, seen)
+	if not frame then
+		return
+	end
+	local fresh = not seen[frame]
+	seen[frame] = true
+	if fresh and frame ~= handler.owner and frame.EnableMouseWheel and frame.HookScript then
+		frame:EnableMouseWheel(true)
+		frame:HookScript("OnMouseWheel", handler.callback)
+	end
+	if frame.GetChildren then
+		for _, child in ipairs({ frame:GetChildren() }) do
+			BindTrackerWheel(child, handler, seen)
+		end
+	end
+end
+
 -- Sizes the viewport to the cap the column gave this section, shows the bar only when the blocks pass it, and holds
 -- the view on the quest at the top. `headerHeight` and `contentsHeight` are Blizzard's own numbers.
 function Module:LayoutTrackerScroll()
@@ -652,6 +671,19 @@ function Module:LayoutTrackerScroll()
 
 	local width = math.max(0, (self:GetWidth() or 0) - (range > 0 and SCROLL_GUTTER or 0))
 	local contents = self.ContentsFrame
+	local seen = self.trackerWheelFrames or {}
+	self.trackerWheelFrames = seen
+	local handler = self.trackerWheelHandler
+	if not handler then
+		handler = {
+			owner = contents,
+			callback = function(_, delta)
+				self:OnTrackerWheel(delta)
+			end,
+		}
+		self.trackerWheelHandler = handler
+	end
+	BindTrackerWheel(contents, handler, seen)
 	if self.scrollContentsWidth ~= width then
 		self.scrollContentsWidth = width
 		contents:SetWidth(width)
@@ -976,7 +1008,8 @@ local function LayoutModules(width, available, reserve)
 		end
 		local room = math.max(0, available - total - GAP)
 		if laterMinimum > 0 then
-			cap = math.min(cap, math.max(minimums[index] or 0, room - math.min(room, laterMinimum)))
+			local gap = math.min(GAP, room)
+			cap = math.min(cap, math.max(minimums[index] or 0, room - math.min(room, laterMinimum + gap)))
 		end
 		module:SetWidth(width)
 		-- The native header template starts at 260 units; it does not stretch with its module. The viewport
@@ -985,10 +1018,10 @@ local function LayoutModules(width, available, reserve)
 			module.Header:SetWidth(width)
 		end
 		local ok = RunSafe(module.safeCall, "tracker section update", module.Update, module, cap)
-		local minimum = ok
-			and type(module.GetMinimumHeight) == "function"
-			and module:GetMinimumHeight()
-			or 0
+		local minimum = 0
+		if ok and type(module.GetMinimumHeight) == "function" then
+			minimum = module:GetMinimumHeight()
+		end
 		if cap > 0 and minimum > cap then
 			-- The cap is the room left after sections above this one. Never borrow from their accounting or make the
 			-- column taller than the room it was given. A later layout reserves this measured floor before earlier caps.
