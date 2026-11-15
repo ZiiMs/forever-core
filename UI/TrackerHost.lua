@@ -960,8 +960,24 @@ local function LayoutModules(width, available, reserve)
 		end
 	end
 	local heights, total = {}, 0
+	local minimums = {}
+	for index, module in ipairs(modules) do
+		if type(module.GetMinimumHeight) == "function" then
+			minimums[index] = module:GetMinimumHeight()
+		else
+			minimums[index] = 0
+		end
+	end
 	local function LayOut(index, cap)
 		local module = modules[index]
+		local laterMinimum = 0
+		for later = index + 1, #modules do
+			laterMinimum = laterMinimum + (minimums[later] or 0)
+		end
+		local room = math.max(0, available - total - GAP)
+		if laterMinimum > 0 then
+			cap = math.min(cap, math.max(minimums[index] or 0, room - math.min(room, laterMinimum)))
+		end
 		module:SetWidth(width)
 		-- The native header template starts at 260 units; it does not stretch with its module. The viewport
 		-- follows that header, so give both the same width before measuring any scroll contents.
@@ -974,9 +990,9 @@ local function LayoutModules(width, available, reserve)
 			and module:GetMinimumHeight()
 			or 0
 		if cap > 0 and minimum > cap then
-			-- Never make the column taller than the room it was given. If the first block itself is taller than the
-			-- available screen, the section keeps the bounded viewport and its own scrollbar instead.
-			module.trackerCap = math.min(minimum, available)
+			-- The cap is the room left after sections above this one. Never borrow from their accounting or make the
+			-- column taller than the room it was given. A later layout reserves this measured floor before earlier caps.
+			module.trackerCap = cap
 			module:UpdateHeight()
 		end
 		local used = ok and module:GetContentsHeight() or 0
