@@ -9,8 +9,8 @@
 
 - Embedded core copies retain shared settings and histories across host removal, thanks to cotijelucie for the report.
   Consumer packaging must adopt embedded copies before installations use this runtime path. (#448)
-- `/fcore report` lists installed Forever addons, their dependency and load status, and captured startup errors even
-  when an addon's own report command did not register. (#509)
+- **The journey marker's diamond sits in the centre of its ring.** Its placement now preserves the half-pixel
+  position needed to centre the artwork without shifting it left or right. (#611)
 
 ## [1.12.1] - 2026-11-14
 
