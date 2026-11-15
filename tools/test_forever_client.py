@@ -211,6 +211,7 @@ class ForeverClientTest(unittest.TestCase):
             mock.patch.object(fc, "wait_for_world") as wait,
             mock.patch.object(fc, "client_pid", return_value=None) as client_pid,
             mock.patch.object(fc, "game_focused", return_value=True),
+            mock.patch.object(fc, "enter_world") as enter_world,
             mock.patch.object(fc, "press_play") as press_play,
             mock.patch.object(fc, "x") as x,
             mock.patch.object(fc, "teardown"),
@@ -224,13 +225,14 @@ class ForeverClientTest(unittest.TestCase):
                 press_play.assert_not_called()
                 client_pid.return_value = 456
                 nudge()
+                enter_world.assert_called_once()
                 return Path("ready.png")
 
             wait.side_effect = waiting
             options = args()
             options.manual_launcher = True
             self.assertEqual(fc.up(options, after_ready=lambda state: state["runtime_dir"]), str(self.runtime))
-            self.assertEqual(x.call_args.args[1:], ("key", "Return"))
+            x.assert_not_called()
         handled = {call.args[0] for call in install.call_args_list}
         self.assertEqual(handled, {fc.signal.SIGTERM, fc.signal.SIGHUP, fc.signal.SIGINT, fc.signal.SIGALRM})
         env = spawn.call_args.kwargs["env"]
@@ -649,11 +651,36 @@ class ForeverClientTest(unittest.TestCase):
         state = {"display": ":1"}
         with (
             mock.patch.object(fc, "client_pid", return_value=456),
-            mock.patch.object(fc.subprocess, "run", return_value=mock.Mock(stdout="World of Warcraft\n")),
+            mock.patch.object(fc, "enter_world") as enter_world,
             mock.patch.object(fc, "x") as x,
         ):
             fc.at_character_select(state, False)
-        self.assertEqual(x.call_args_list, [mock.call(state, "key", "Return")])
+        enter_world.assert_called_once_with(state)
+        x.assert_not_called()
+
+    def test_character_select_nudge_does_not_send_return_on_login_frame(self):
+        state = {"display": ":1"}
+        with (
+            mock.patch.object(fc, "client_pid", return_value=456),
+            mock.patch.object(fc, "game_focused", return_value=True),
+            mock.patch.object(fc, "shot"),
+            mock.patch.object(fc, "enter_world_targets", return_value=[]),
+            mock.patch.object(fc, "x") as x,
+        ):
+            fc.enter_world(state)
+        x.assert_not_called()
+
+    def test_enter_world_targets_requires_adjacent_enter_and_world_words(self):
+        with mock.patch.object(
+            fc,
+            "ocr_words",
+            return_value=[
+                ("Enter", 95, 100, 200, 40, 20),
+                ("World", 95, 150, 201, 45, 20),
+                ("Enter", 95, 100, 500, 40, 20),
+            ],
+        ):
+            self.assertEqual(fc.enter_world_targets(Path("frame.png")), [(100, 200, 95, 21, 95)])
 
     def test_character_select_nudge_presses_play_with_the_automatic_launcher(self):
         state = {"display": ":1"}

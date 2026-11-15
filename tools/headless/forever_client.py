@@ -830,6 +830,39 @@ def press_play(state: dict) -> None:
     (STATE_DIR / "last-input").touch()
 
 
+def enter_world_targets(image: Path) -> list[tuple[int, int, int, int, float]]:
+    """Find the visible Enter World label in a character-select screenshot."""
+    words = [word for word in ocr_words(image) if word[1] >= 0 and word[0].casefold() in {"enter", "world"}]
+    targets = []
+    for enter in words:
+        for world in words:
+            if enter is world or world[0].casefold() == enter[0].casefold():
+                continue
+            ex, ey, ew, eh = enter[2:6]
+            wx, wy, ww, wh = world[2:6]
+            if abs(ey - wy) > max(eh, wh) or not (ex < wx + ww and wx < ex + ew + 4 * ew):
+                continue
+            left, top = min(ex, wx), min(ey, wy)
+            right, bottom = max(ex + ew, wx + ww), max(ey + eh, wy + wh)
+            targets.append((left, top, right - left, bottom - top, min(enter[1], world[1])))
+    return list(dict.fromkeys(targets))
+
+
+def enter_world(state: Mapping) -> None:
+    """Click Enter World only when the current game frame visibly contains that label."""
+    if not game_focused(state):
+        return
+    image = shot(state, STATE_DIR / "character-select.png")
+    targets = enter_world_targets(image)
+    if len(targets) != 1:
+        return
+    left, top, width, height, _ = targets[0]
+    x(state, "mousemove", str(left + width // 2), str(top + height // 2))
+    time.sleep(0.5)
+    x(state, "click", "1")
+    (STATE_DIR / "last-input").touch()
+
+
 def reload(state: Mapping, timeout: float = 120) -> Path:
     # The new cycle's screenshots are the ones after the command was sent: a screenshot an earlier reload's flow
     # still takes would otherwise be read as this one's world load.
@@ -1914,8 +1947,7 @@ def at_character_select(state: Mapping, manual_launcher: bool) -> None:
     starts a second client, which then ends on its own login form.
     """
     if client_pid():
-        if game_focused(state):
-            send(state, "key", "Return")
+        enter_world(state)
     elif not manual_launcher:
         press_play(state)
 
