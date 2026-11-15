@@ -99,6 +99,15 @@ def addon_folder(addons: Path) -> Path:
         raise EvalError(f"{link} does not point into a checkout of {ADDON}")
     if not any((parent / ".git").exists() for parent in (target, *target.parents)):
         raise EvalError(f"{target} is not inside a git checkout: eval refuses to leave a snippet there")
+    try:
+        core = (target / "Core.lua").read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        raise EvalError(f"{target} has no readable capture protocol: {error}") from None
+    if CAPTURE not in core or "captureFlow" not in core:
+        raise EvalError(
+            f"{link} points to an older !!DevSmoke without the {CAPTURE} capture protocol; "
+            "link the matching ForeverCore checkout before running a flow"
+        )
     return target
 
 

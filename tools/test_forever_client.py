@@ -691,6 +691,20 @@ class ForeverClientTest(unittest.TestCase):
         ):
             self.assertEqual(len(fc.enter_world_targets(Path("frame.png"))), 2)
 
+    def test_enter_world_targets_ignores_login_labels(self):
+        with (
+            mock.patch.object(fc, "png_pixels", return_value=(1, 1, 4, [b"\0\0\0\0"])),
+            mock.patch.object(
+                fc,
+                "ocr_words_with_lines",
+                return_value=[
+                    ("Email", 96.0, 700, 400, 120, 24, 1001),
+                    ("Password", 96.0, 700, 450, 150, 24, 1002),
+                ],
+            ),
+        ):
+            self.assertEqual(fc.enter_world_targets(Path("login.png")), [])
+
     def test_character_select_nudge_presses_play_with_the_automatic_launcher(self):
         state = {"display": ":1"}
         with (
