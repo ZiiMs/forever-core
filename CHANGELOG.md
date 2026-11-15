@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Tracker sections can change their height cap.** Addons can update a registered section through Core while keeping shared scrolling, responsive bounds and combat deferral. (#618)
+
 - **Release zips are exercised before upload.** The release gate loads the extracted package through the shared simulator and refuses missing files, runtime errors and a package folder that differs from the tested archive. (#203)
 
 ## [1.12.2] - 2026-11-15

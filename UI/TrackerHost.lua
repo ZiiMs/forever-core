@@ -112,6 +112,7 @@ if type(existing) == "table" then
 		"SetAttached",
 		"SetLocked",
 		"SetScale",
+		"SetSectionMaxHeight",
 	}) do
 		local method = existing[name]
 		if type(method) == "function" then
@@ -975,7 +976,8 @@ local function SectionCap(module, available)
 	if type(maximum) ~= "number" then
 		maximum = SECTION_MAX_HEIGHT
 	end
-	return math.min(available, math.max(0, maximum))
+	local minimum = type(module.GetMinimumHeight) == "function" and module:GetMinimumHeight() or 0
+	return math.min(available, math.max(minimum, maximum))
 end
 
 -- Lays every section out from the host's top, each in the room the ones above it left, less the gap under it, so the
@@ -1729,6 +1731,21 @@ function api.Attach(module, show, contract)
 	module:SetContainer(host)
 	AddHeaderMenu(module)
 	host:MarkDirty()
+end
+-- Only the registered section's cap changes here. Geometry stays in the host's queued layout, including combat.
+---@param module ForeverTrackerModule
+---@param value? number nil restores the default 200-unit cap
+---@return boolean accepted
+function api.SetSectionMaxHeight(module, value)
+	if not api.IsAttached(module) then
+		return false
+	end
+	if value ~= nil and (Coordinate(value) == nil or value < 0) then
+		return false
+	end
+	module.trackerMaxHeight = value
+	host:MarkDirty()
+	return true
 end
 function api.IsAttached(module)
 	---@cast module ForeverTrackerModule?

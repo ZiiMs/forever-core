@@ -269,6 +269,35 @@ scroll.check(rest.available > 200 and rest:GetContentsHeight() == 125, "the rema
 scroll.check(rest.trackerOverflow == false and rest.scrollBar:IsShown() == false, "a short section has no bar")
 scroll.check(rest.ContentsFrame:GetWidth() == rest:GetWidth(), "a short section keeps the full block width")
 
+local scrollFrame = capped.scrollFrame
+local sectionWidth = capped:GetWidth()
+scroll.check(scroll.ns.TrackerHost.SetSectionMaxHeight(capped, 280), "an attached section accepts a height cap")
+scroll.drain()
+scroll.check(capped.available == 280, "the setter changes the normal layout cap")
+scroll.check(
+	capped.scrollFrame == scrollFrame and capped:GetWidth() == sectionWidth,
+	"the cap reuses scrolling and shared width"
+)
+scroll.check(scroll.ns.TrackerHost.SetSectionMaxHeight(capped, 1), "a small cap is accepted")
+scroll.drain()
+scroll.check(capped.available >= capped:GetMinimumHeight(), "a requested cap preserves the measured first block")
+scroll.check(not scroll.ns.TrackerHost.SetSectionMaxHeight({}, 280), "an unregistered section is rejected")
+for _, invalid in ipairs({ -1, math.huge, 0 / 0, "280" }) do
+	scroll.check(not scroll.ns.TrackerHost.SetSectionMaxHeight(capped, invalid), "an invalid cap is rejected")
+end
+scroll.setCombat(true)
+local heldHeight = capped:GetHeight()
+scroll.check(scroll.ns.TrackerHost.SetSectionMaxHeight(capped, 300), "combat accepts a pending cap")
+scroll.drain()
+scroll.check(capped:GetHeight() == heldHeight, "combat holds section geometry")
+scroll.setCombat(false)
+scroll.fire("PLAYER_REGEN_ENABLED")
+scroll.drain()
+scroll.check(capped.available == 300, "combat ending applies the pending cap")
+scroll.check(scroll.ns.TrackerHost.SetSectionMaxHeight(capped, nil), "nil restores the default")
+scroll.drain()
+scroll.check(capped.available == 200, "the default cap is restored")
+
 capped:OnTrackerWheel(-1)
 scroll.check(capped.scrollOffset == 60, "the wheel moves one block, not a fixed step")
 scroll.check(math.abs(capped.scrollBar:GetScrollPercentage() - 60 / 325) < 1e-9, "the bar follows the view")
