@@ -5,6 +5,16 @@ local SAFE_CHARACTER = _G.FOREVER_HEADLESS_CHARACTER
 local UnitGUID = _G.UnitGUID
 local UnitAffectingCombat = _G.UnitAffectingCombat
 local IsResting = _G.IsResting
+local MARKER = {
+	"10011001",
+	"01100110",
+	"11001001",
+	"00110110",
+	"10101100",
+	"01010011",
+	"11100010",
+	"00011101",
+}
 
 local function safeCharacter()
 	if type(SAFE_CHARACTER) ~= "table" then
@@ -55,11 +65,21 @@ frame:SetScript("OnEvent", function()
 		local marker = CreateFrame("Frame", nil, UIParent)
 		marker:SetIgnoreParentScale(true)
 		marker:SetFrameStrata("TOOLTIP")
-		marker:SetSize(8, 8)
+		marker:SetSize(32, 32)
 		marker:SetPoint("CENTER")
-		local texture = marker:CreateTexture(nil, "OVERLAY")
-		texture:SetAllPoints()
-		texture:SetColorTexture(31 / 255, 239 / 255, 117 / 255, 1)
+		for row, bits in ipairs(MARKER) do
+			for column = 1, #bits do
+				local texture = marker:CreateTexture(nil, "OVERLAY")
+				texture:SetSize(4, 4)
+				texture:SetPoint("TOPLEFT", (column - 1) * 4, -(row - 1) * 4)
+				texture:SetColorTexture(
+					bits:sub(column, column) == "1" and 1 or 0,
+					bits:sub(column, column) == "1" and 1 or 0,
+					bits:sub(column, column) == "1" and 1 or 0,
+					1
+				)
+			end
+		end
 		local box = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
 		if box then
 			ChatEdit_DeactivateChat(box)

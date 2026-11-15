@@ -91,37 +91,69 @@ class ForeverClientTest(unittest.TestCase):
         self.assertFalse((self.state / "headless-addon").exists())
 
     def test_readiness_marker_accepts_native_jpeg_and_rejects_incomplete_png(self):
-        def png(rgb):
-            raw = b"".join(b"\0" + bytes(rgb) * 8 for _ in range(8))
+        def marker_image():
+            image = Image.new("RGB", (32, 32), (0, 0, 0))
+            for row, bits in enumerate(fc.HEADLESS_MARKER):
+                for column, bit in enumerate(bits):
+                    if bit == "1":
+                        for x in range(column * fc.MARKER_CELL, (column + 1) * fc.MARKER_CELL):
+                            for y in range(row * fc.MARKER_CELL, (row + 1) * fc.MARKER_CELL):
+                                image.putpixel((x, y), (255, 255, 255))
+            return image
+
+        def png(image):
+            raw = b"".join(
+                b"\0" + b"".join(bytes(image.getpixel((x, y))) for x in range(image.width))
+                for y in range(image.height)
+            )
 
             def chunk(kind, payload):
                 checksum = struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
                 return struct.pack(">I", len(payload)) + kind + payload + checksum
 
-            header = chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0))
+            header = chunk(b"IHDR", struct.pack(">IIBBBBB", image.width, image.height, 8, 2, 0, 0, 0))
             body = chunk(b"IDAT", zlib.compress(raw))
             return b"\x89PNG\r\n\x1a\n" + header + body + chunk(b"IEND", b"")
 
-        marker = self.state / "marker.png"
-        marker.write_bytes(png((31, 239, 117)))
-        self.assertTrue(fc.has_headless_marker(marker))
+        marker_path = self.state / "marker.png"
+        marker_path.write_bytes(png(marker_image()))
+        self.assertTrue(fc.has_headless_marker(marker_path))
         plain = self.state / "plain.png"
-        plain.write_bytes(png((0, 0, 0)))
+        plain.write_bytes(png(Image.new("RGB", (32, 32), (0, 0, 0))))
         self.assertFalse(fc.has_headless_marker(plain))
-        jpeg = self.state / "marker.jpg"
         image = Image.new("RGB", (64, 64), (0, 0, 0))
-        for x in range(28, 36):
-            for y in range(28, 36):
-                image.putpixel((x, y), (31, 239, 117))
-        image.save(jpeg, format="JPEG", quality=95)
-        self.assertTrue(fc.has_headless_marker(jpeg))
+        marker = marker_image()
+        image.paste(marker, (16, 16))
+        for quality in (10, 50, 95):
+            for subsampling in (0, 2):
+                jpeg = self.state / f"marker-{quality}-{subsampling}.jpg"
+                image.save(jpeg, format="JPEG", quality=quality, subsampling=subsampling)
+                self.assertTrue(fc.has_headless_marker(jpeg), f"quality={quality}, subsampling={subsampling}")
+        near = self.state / "near.jpg"
+        for x in range(16, 20):
+            for y in range(16, 20):
+                image.putpixel((x, y), (0, 0, 0))
+        image.save(near, format="JPEG", quality=95)
+        self.assertFalse(fc.has_headless_marker(near))
         jpeg_plain = self.state / "plain.jpg"
         Image.new("RGB", (64, 64), (0, 0, 0)).save(jpeg_plain, format="JPEG", quality=95)
         self.assertFalse(fc.has_headless_marker(jpeg_plain))
+        truncated = self.state / "truncated.jpg"
+        truncated.write_bytes((self.state / "marker-95-2.jpg").read_bytes()[:-32])
+        with self.assertRaises(fc.ClientError):
+            fc.has_headless_marker(truncated)
         partial = self.state / "partial.png"
-        partial.write_bytes(marker.read_bytes()[:-4])
+        partial.write_bytes(marker_path.read_bytes()[:-4])
         with self.assertRaises(fc.ClientError):
             fc.has_headless_marker(partial)
+
+    def test_readiness_marker_protocol_matches_lua_producer(self):
+        source = Path(__file__).parent / "headless/!!ForeverHeadless/ForeverHeadless.lua"
+        lua = source.read_text()
+        for row in fc.HEADLESS_MARKER:
+            self.assertIn(f'"{row}"', lua)
+        self.assertIn("marker:SetSize(32, 32)", lua)
+        self.assertIn("texture:SetSize(4, 4)", lua)
 
     def test_runtime_directory_fallback_is_existing_owned_private_directory(self):
         root = self.state / "users"

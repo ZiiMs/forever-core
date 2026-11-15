@@ -653,6 +653,20 @@ def slash(state: Mapping, command: str) -> None:
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_CHANNELS = {2: 3, 6: 4}  # truecolour, and truecolour with alpha
+HEADLESS_MARKER = (
+    "10011001",
+    "01100110",
+    "11001001",
+    "00110110",
+    "10101100",
+    "01010011",
+    "11100010",
+    "00011101",
+)
+# The addon emits this as a 32x32 black/white grid. JPEG is the client's native
+# screenshot format, so each 4x4 cell is decoded by its average luminance and
+# the protocol's binary midpoint (128), rather than by a fitted colour ratio.
+MARKER_CELL = 4
 # The flat fill the launcher draws its primary Play button in on the game page. The word sits inside it as white
 # text, and a whole-page tesseract pass skips the filled button along with its label, so the drawn fill is what
 # locates the control: no fixed point and no page layout (#547). A launcher build that draws another fill is a change
@@ -736,16 +750,28 @@ def has_headless_marker(path: Path) -> bool:
             image.load()
             rgb = image.convert("RGB")
             width, height = rgb.size
-            pixels = list(rgb.crop((width // 2 - 4, height // 2 - 4, width // 2 + 4, height // 2 + 4)).getdata())
     except ClientError:
         raise
     except (OSError, ValueError) as error:
         raise ClientError(f"{path} is not a complete screenshot: {error}") from None
-    if width < 8 or height < 8:
+    marker_size = len(HEADLESS_MARKER) * MARKER_CELL
+    if width < marker_size or height < marker_size:
         return False
-    # JPEG quantisation shifts the exact UI colour, so require every marker
-    # pixel to remain recognisably green rather than matching one byte triplet.
-    return all(g >= 150 and g > r * 1.8 and g > b * 1.3 for r, g, b in pixels)
+    left, top = width // 2 - marker_size // 2, height // 2 - marker_size // 2
+    for row, bits in enumerate(HEADLESS_MARKER):
+        for column, bit in enumerate(bits):
+            cell = rgb.crop(
+                (
+                    left + column * MARKER_CELL,
+                    top + row * MARKER_CELL,
+                    left + (column + 1) * MARKER_CELL,
+                    top + (row + 1) * MARKER_CELL,
+                )
+            )
+            luminance = sum((299 * r + 587 * g + 114 * b) // 1000 for r, g, b in cell.getdata()) / (MARKER_CELL**2)
+            if (luminance >= 128) != (bit == "1"):
+                return False
+    return True
 
 
 def png_unfilter(line: bytearray, previous: bytes, channels: int, kind: int) -> None:
