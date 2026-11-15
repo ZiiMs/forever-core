@@ -675,12 +675,21 @@ class ForeverClientTest(unittest.TestCase):
             fc,
             "ocr_words",
             return_value=[
-                ("Enter", 95, 100, 200, 40, 20),
-                ("World", 95, 150, 201, 45, 20),
-                ("Enter", 95, 100, 500, 40, 20),
+                ("EnterWorld", 51.4, 896, 716, 127, 30),
             ],
         ):
-            self.assertEqual(fc.enter_world_targets(Path("frame.png")), [(100, 200, 95, 21, 95)])
+            self.assertEqual(fc.enter_world_targets(Path("frame.png")), [(896, 716, 127, 30, 51.4)])
+
+    def test_enter_world_targets_fails_closed_on_ambiguous_exact_labels(self):
+        with mock.patch.object(
+            fc,
+            "ocr_words",
+            return_value=[
+                ("EnterWorld", 51.4, 896, 716, 127, 30),
+                ("EnterWorld", 51.4, 896, 600, 127, 30),
+            ],
+        ):
+            self.assertEqual(len(fc.enter_world_targets(Path("frame.png"))), 2)
 
     def test_character_select_nudge_presses_play_with_the_automatic_launcher(self):
         state = {"display": ":1"}

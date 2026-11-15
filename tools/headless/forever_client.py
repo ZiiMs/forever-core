@@ -831,25 +831,10 @@ def press_play(state: dict) -> None:
 
 
 def enter_world_targets(image: Path) -> list[tuple[int, int, int, int, float]]:
-    """Find the visible Enter World label in a character-select screenshot."""
+    """Find exact Enter World labels in a character-select screenshot."""
     words = [word for word in ocr_words(image, psm=6) if word[1] >= 0]
     combined = [word for word in words if word[0].casefold().replace(" ", "") == "enterworld"]
-    if len(combined) == 1:
-        return combined
-    words = [word for word in words if word[0].casefold() in {"enter", "world"}]
-    targets = []
-    for enter in words:
-        for world in words:
-            if enter is world or world[0].casefold() == enter[0].casefold():
-                continue
-            ex, ey, ew, eh = enter[2:6]
-            wx, wy, ww, wh = world[2:6]
-            if abs(ey - wy) > max(eh, wh) or not (ex < wx + ww and wx < ex + ew + 4 * ew):
-                continue
-            left, top = min(ex, wx), min(ey, wy)
-            right, bottom = max(ex + ew, wx + ww), max(ey + eh, wy + wh)
-            targets.append((left, top, right - left, bottom - top, min(enter[1], world[1])))
-    return list(dict.fromkeys(targets))
+    return [(word[2], word[3], word[4], word[5], word[1]) for word in combined]
 
 
 def enter_world(state: Mapping) -> None:
