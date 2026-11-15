@@ -13,6 +13,8 @@ local function run(config, name, guid, resting, dead, combat, lockdown, screensh
 			end,
 			SetSize = function() end,
 			SetPoint = function() end,
+			SetIgnoreParentScale = function() end,
+			SetFrameStrata = function() end,
 			Hide = function() end,
 			CreateTexture = function()
 				return { SetAllPoints = function() end, SetColorTexture = function() end }

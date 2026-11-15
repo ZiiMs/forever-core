@@ -76,6 +76,16 @@ class ForeverClientTest(unittest.TestCase):
         with self.assertRaises(fc.ClientError):
             fc.lua_string("Barry\x00")
 
+    def test_generated_addon_cleanup_is_atomic(self):
+        source = self.state / "source-addon"
+        source.mkdir()
+        (source / "!!ForeverHeadless.toc").write_text("ForeverHeadless.lua\n")
+        (source / "ForeverHeadless.lua").write_text("-- fixture\n")
+        with mock.patch.object(fc, "ADDON", source):
+            with self.assertRaises(fc.ClientError):
+                fc.prepare_headless_addon({"name": "Bad\x00", "guid": "Player-1", "require_resting": True})
+        self.assertFalse((self.state / "headless-addon").exists())
+
     def test_runtime_directory_fallback_is_existing_owned_private_directory(self):
         root = self.state / "users"
         root.mkdir()

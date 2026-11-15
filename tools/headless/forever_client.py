@@ -330,18 +330,23 @@ def prepare_headless_addon(character: Mapping[str, str | bool]) -> Path:
     target = STATE_DIR / "headless-addon"
     if target.exists() or target.is_symlink():
         raise ClientError(f"{target} is left over from an earlier session: recover it before starting")
-    shutil.copytree(ADDON, target)
-    (target / "Config.lua").write_text(
-        "FOREVER_HEADLESS_CHARACTER = {name="
-        + lua_string(str(character["name"]))
-        + ", guid="
-        + lua_string(str(character["guid"]))
-        + ", require_resting=true}\n",
-        encoding="utf-8",
-    )
-    toc = target / "!!ForeverHeadless.toc"
-    text = toc.read_text(encoding="utf-8")
-    toc.write_text(text.replace("ForeverHeadless.lua\n", "Config.lua\nForeverHeadless.lua\n"), encoding="utf-8")
+    try:
+        shutil.copytree(ADDON, target)
+        (target / "Config.lua").write_text(
+            "FOREVER_HEADLESS_CHARACTER = {name="
+            + lua_string(str(character["name"]))
+            + ", guid="
+            + lua_string(str(character["guid"]))
+            + ", require_resting=true}\n",
+            encoding="utf-8",
+        )
+        toc = target / "!!ForeverHeadless.toc"
+        text = toc.read_text(encoding="utf-8")
+        toc.write_text(text.replace("ForeverHeadless.lua\n", "Config.lua\nForeverHeadless.lua\n"), encoding="utf-8")
+    except BaseException:
+        if target.is_dir():
+            shutil.rmtree(target)
+        raise
     return target
 
 

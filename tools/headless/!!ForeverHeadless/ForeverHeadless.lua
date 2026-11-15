@@ -47,6 +47,8 @@ frame:SetScript("OnEvent", function()
 			return
 		end
 		local marker = CreateFrame("Frame", nil, UIParent)
+		marker:SetIgnoreParentScale(true)
+		marker:SetFrameStrata("TOOLTIP")
 		marker:SetSize(8, 8)
 		marker:SetPoint("CENTER")
 		local texture = marker:CreateTexture(nil, "OVERLAY")
