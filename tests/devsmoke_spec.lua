@@ -32,6 +32,7 @@ local stop = 0
 local fakeDurations = { 0, 9 }
 
 local saves = 0
+local professionButton
 
 local function addAddon(name, loaded, deps, version)
 	addons[#addons + 1] = { name = name, loaded = loaded ~= false, deps = deps, version = version }
@@ -65,6 +66,31 @@ _G.CreateFrame = function(kind)
 	end
 	function frame:SetScript(script, handler)
 		self.scripts[script] = handler
+	end
+	function frame:SetAttribute(key, value)
+		self.attributes = self.attributes or {}
+		self.attributes[key] = value
+	end
+	function frame:RegisterForClicks(button)
+		self.clickButton = button
+	end
+	function frame:SetSize(width, height)
+		self.width, self.height = width, height
+	end
+	function frame:SetPoint(point)
+		self.point = point
+	end
+	function frame:SetText(text)
+		self.text = text
+	end
+	function frame:Show()
+		self.shown = true
+	end
+	function frame:Hide()
+		self.shown = false
+	end
+	if kind == "Button" then
+		professionButton = frame
 	end
 	frames[#frames + 1] = frame
 	return frame
@@ -335,6 +361,7 @@ _G.C_TradeSkillUI = {
 		professionWindow.shown = true
 	end,
 }
+_G.C_Spell = { GetSpellName = function(id) return id == 2550 and "Cooking" or nil end }
 
 local clock = 0
 _G.time = function()
@@ -662,12 +689,16 @@ equal(thanksUsage[1], "Dev Smoke: usage /devsmoke thanks <addon title> [player]"
 -- /devsmoke prof opens Cooking when no profession window is open, then selects the addon's tab.
 equal(professionWindow.shown, false, "no profession window is open yet")
 local profLines = command("prof cooking")
-equal(#openedSkills, 1, "the Cooking window is opened")
-equal(openedSkills[1], 185, "Cooking is skill line 185")
-equal(selectedProfession, "cooking", "the tab is selected")
-equal(profLines[1], "Dev Smoke: profession tab cooking", "the selection is reported")
+equal(#openedSkills, 0, "the protected opener is not called from chat")
+equal(professionButton.attributes.type, "spell", "the opener is a secure spell button")
+equal(professionButton.attributes.spell, "Cooking", "the opener casts the Cooking spell")
+equal(professionButton.width, 220, "the opener is visible at a useful size")
+professionWindow.shown = true
+professionButton.scripts.OnClick()
+equal(selectedProfession, "cooking", "the deferred tab is selected after the click")
+equal(profLines[1], "Dev Smoke: click the Cooking button to open the profession window", "the command asks for a click")
 command("prof alchemy")
-equal(#openedSkills, 1, "an open profession window is kept")
+equal(#openedSkills, 0, "an open profession window is kept")
 equal(selectedProfession, "alchemy", "the next tab is selected")
 
 -- /devsmoke close hides the Thanks window, Professions, the world map and Settings through the client's own routes.

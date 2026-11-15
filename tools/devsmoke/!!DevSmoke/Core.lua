@@ -601,6 +601,46 @@ end
 
 -- A profession tab needs its window open, and Cooking opens with no profession known, so it is the one the command
 -- uses when nothing is open.
+local pendingProfession
+local professionOpener
+local professionEvents
+
+local function SelectPendingProfession()
+	local window = ProfessionsFrame
+	if pendingProfession and window and window:IsShown() then
+		local tab = pendingProfession
+		pendingProfession = nil
+		ForeverCore.ProfessionTabs.Select(tab)
+	end
+end
+
+local function EnsureProfessionOpener()
+	if professionOpener then
+		return professionOpener
+	end
+	if type(CreateFrame) ~= "function" then
+		return nil
+	end
+	local spellName = C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(2550) or "Cooking"
+	local button = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+	if type(button.SetAttribute) ~= "function" then
+		return nil
+	end
+	button:SetAttribute("type", "spell")
+	button:SetAttribute("spell", spellName)
+	button:SetSize(220, 32)
+	button:SetPoint("CENTER")
+	button:SetText("Open Cooking")
+	button:RegisterForClicks("LeftButtonUp")
+	button:SetScript("OnClick", SelectPendingProfession)
+	button:Hide()
+	professionOpener = button
+	professionEvents = CreateFrame("Frame")
+	professionEvents:RegisterEvent("TRADE_SKILL_SHOW")
+	professionEvents:SetScript("OnEvent", SelectPendingProfession)
+	return button
+end
+
 local function sayProf(argument)
 	local tab = trim(argument)
 	if tab == "" then
@@ -614,12 +654,15 @@ local function sayProf(argument)
 	end
 	local window = ProfessionsFrame
 	if not (window and window:IsShown()) then
-		local tradeSkill = C_TradeSkillUI
-		if type(tradeSkill) ~= "table" or type(tradeSkill.OpenTradeSkill) ~= "function" then
+		local opener = EnsureProfessionOpener()
+		if not opener then
 			say("Dev Smoke: cannot open the Cooking window")
 			return
 		end
-		tradeSkill.OpenTradeSkill(COOKING_SKILL_LINE)
+		pendingProfession = tab
+		opener:Show()
+		say("Dev Smoke: click the Cooking button to open the profession window")
+		return
 	end
 	page.Select(tab)
 	say(("Dev Smoke: profession tab %s"):format(tab))
