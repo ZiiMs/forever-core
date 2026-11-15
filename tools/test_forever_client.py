@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import struct
@@ -150,10 +151,12 @@ class ForeverClientTest(unittest.TestCase):
     def test_readiness_marker_protocol_matches_lua_producer(self):
         source = Path(__file__).parent / "headless/!!ForeverHeadless/ForeverHeadless.lua"
         lua = source.read_text()
-        for row in fc.HEADLESS_MARKER:
-            self.assertIn(f'"{row}"', lua)
-        self.assertIn("marker:SetSize(32, 32)", lua)
-        self.assertIn("texture:SetSize(4, 4)", lua)
+        match = re.search(r"local MARKER = \{(?P<table>.*?)\n\}", lua, re.DOTALL)
+        self.assertIsNotNone(match)
+        self.assertEqual(tuple(re.findall(r'"([01]{8})"', match.group("table"))), fc.HEADLESS_MARKER)
+        size = len(fc.HEADLESS_MARKER) * fc.MARKER_CELL
+        self.assertIn(f"marker:SetSize({size}, {size})", lua)
+        self.assertIn(f"texture:SetSize({fc.MARKER_CELL}, {fc.MARKER_CELL})", lua)
 
     def test_runtime_directory_fallback_is_existing_owned_private_directory(self):
         root = self.state / "users"
