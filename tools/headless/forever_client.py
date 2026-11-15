@@ -1241,6 +1241,13 @@ def recover_links() -> int:
         return 0
     links = record["links"]
     restore_links(links)
+    try:
+        stale_state = json.loads(state_file().read_text())
+    except (OSError, ValueError):
+        stale_state = {}
+    generated = Path(stale_state.get("headless_addon", "")) if stale_state.get("headless_addon") else None
+    if generated and generated.is_dir() and generated.parent == STATE_DIR:
+        shutil.rmtree(generated)
     put_back = [describe_restore(link) for link in links if link.get("restored")]
     if put_back:
         detail = ", ".join(put_back)
