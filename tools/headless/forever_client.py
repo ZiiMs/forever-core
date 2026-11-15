@@ -143,6 +143,7 @@ NVIDIA_MISMATCH = "driver/library version mismatch"
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "forever-client"
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "forever-client/env.json"
 ADDON = Path(__file__).resolve().parent / "!!ForeverHeadless"
+CHARACTER_PREFLIGHT = Path(__file__).resolve().parent / "character_preflight.lua"
 WIDTH, HEIGHT = 1920, 1080
 MAX_SESSION = 30 * 60
 WAIT_POLL = 1.0  # how often a `--wait` queue checks the lock and the Wine prefix
@@ -2113,6 +2114,9 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
         state["ready"] = time.time()
         state_file().write_text(json.dumps(state))
         print(f"READY in the world after {time.time() - started:.0f} s ({ready.name})", flush=True)
+        preflight_token = run_flow(state, str(CHARACTER_PREFLIGHT))
+        check_flow_eval(state, str(CHARACTER_PREFLIGHT), preflight_token)
+        print("CHARACTER_PREFLIGHT passed", flush=True)
         if after_ready:
             return after_ready(state)
         while gamescope.poll() is None:
