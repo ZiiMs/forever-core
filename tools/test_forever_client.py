@@ -691,6 +691,31 @@ class ForeverClientTest(unittest.TestCase):
         ):
             self.assertEqual(len(fc.enter_world_targets(Path("frame.png"))), 2)
 
+    def test_enter_world_targets_fails_closed_on_exact_and_split_labels(self):
+        with (
+            mock.patch.object(fc, "png_pixels", return_value=(1, 1, 1, [b"\x00"])),
+            mock.patch.object(
+                fc,
+                "ocr_words_with_lines",
+                return_value=[
+                    ("EnterWorld", 51.4, 896, 716, 127, 30, (1, 1, 1)),
+                    ("Enter", 51.4, 896, 600, 55, 30, (2, 1, 1)),
+                    ("World", 51.4, 960, 600, 60, 30, (2, 1, 1)),
+                ],
+            ),
+        ):
+            self.assertEqual(len(fc.enter_world_targets(Path("frame.png"))), 2)
+
+    def test_ocr_line_identity_preserves_all_tsv_components(self):
+        tsv = """level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext
+1\t1\t1\t1\t1\t1\t10\t20\t30\t40\t95\tEnter
+1\t1\t1\t1\t101\t1\t10\t20\t30\t40\t95\tWorld
+"""
+        with mock.patch.object(fc.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=tsv, stderr="")):
+            words = fc.ocr_words_with_lines(Path("frame.png"), psm=6)
+        self.assertEqual(words[0][-1], (1, 1, 1))
+        self.assertEqual(words[1][-1], (1, 1, 101))
+
     def test_enter_world_targets_ignores_login_labels(self):
         with (
             mock.patch.object(fc, "png_pixels", return_value=(1, 1, 4, [b"\0\0\0\0"])),

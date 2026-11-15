@@ -44,6 +44,7 @@ At the client: /reload, then read DevSmokeDB.eval, or the Agent chat tab, which 
 from __future__ import annotations
 
 import argparse
+import re
 import secrets
 import shutil
 import subprocess
@@ -60,6 +61,7 @@ TOKEN = "DevSmokeEvalRun"
 # Whether this chunk is a proof flow: only a flow schedules the ready-check screenshot `proof` waits for. An eval's
 # chunk is false, so its second reload cannot see a delayed flow screenshot as the world load (#588).
 CAPTURE = "DevSmokeEvalCapture"
+CAPTURE_PROTOCOL = 1
 
 
 class EvalError(Exception):
@@ -103,9 +105,10 @@ def addon_folder(addons: Path) -> Path:
         core = (target / "Core.lua").read_text(encoding="utf-8", errors="replace")
     except OSError as error:
         raise EvalError(f"{target} has no readable capture protocol: {error}") from None
-    if CAPTURE not in core or "captureFlow" not in core:
+    protocol = re.search(r"(?m)^DevSmokeCaptureProtocol\s*=\s*(\d+)\s*$", core)
+    if not protocol or int(protocol.group(1)) != CAPTURE_PROTOCOL:
         raise EvalError(
-            f"{link} points to an older !!DevSmoke without the {CAPTURE} capture protocol; "
+            f"{link} does not provide capture protocol {CAPTURE_PROTOCOL}; "
             "link the matching ForeverCore checkout before running a flow"
         )
     return target

@@ -2,6 +2,7 @@
 -- keeps a pass or fail line per surface in DevSmokeDB. Nothing here ships to players and nothing here is secure.
 local MAX_RUNS = 20
 local STEP_DELAY = 0.5
+DevSmokeCaptureProtocol = 1
 
 local run
 

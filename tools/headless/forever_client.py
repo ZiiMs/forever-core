@@ -778,7 +778,7 @@ def ocr_words(image: Path, psm: int = 11) -> list[tuple[str, float, int, int, in
     return words
 
 
-def ocr_words_with_lines(image: Path, psm: int) -> list[tuple[str, float, int, int, int, int, int]]:
+def ocr_words_with_lines(image: Path, psm: int) -> list[tuple[str, float, int, int, int, int, tuple[int, int, int]]]:
     """Read OCR words with their TSV line number for exact multi-word labels."""
     ocr = subprocess.run(
         ["tesseract", str(image), "stdout", "--psm", str(psm), "tsv"],
@@ -799,7 +799,7 @@ def ocr_words_with_lines(image: Path, psm: int) -> list[tuple[str, float, int, i
             confidence = float(fields[10])
         except (TypeError, ValueError):
             continue
-        words.append((fields[11].strip(), confidence, left, top, width, height, (block * 1000) + (paragraph * 100) + line_number))
+        words.append((fields[11].strip(), confidence, left, top, width, height, (block, paragraph, line_number)))
     return words
 
 
@@ -871,8 +871,6 @@ def enter_world_targets(image: Path) -> list[tuple[int, int, int, int, float]]:
     words = [word for word in ocr_words_with_lines(channel, psm=6) if word[1] >= 0]
     combined = [word for word in words if word[0].casefold().replace(" ", "") == "enterworld"]
     targets = [(word[2], word[3], word[4], word[5], word[1]) for word in combined]
-    if targets:
-        return targets
     for enter in words:
         if enter[0].casefold() != "enter":
             continue

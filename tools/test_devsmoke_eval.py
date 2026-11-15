@@ -27,7 +27,7 @@ class DevSmokeEvalTest(unittest.TestCase):
         self.addon.mkdir(parents=True)
         (self.checkout / ".git").mkdir()
         (self.addon / "!!DevSmoke.toc").write_text("## Interface: 16001\n## Title: Dev Smoke\nCore.lua\n")
-        (self.addon / "Core.lua").write_text("local captureFlow = function() end\nlocal DevSmokeEvalCapture = true\n")
+        (self.addon / "Core.lua").write_text("DevSmokeCaptureProtocol = 1\n")
         (self.addons / "!!DevSmoke").symlink_to(self.addon)
         self.snippet = self.root / "probe.lua"
         self.snippet.write_text('print("hi")\nreturn 42\n')
@@ -145,8 +145,8 @@ class DevSmokeEvalTest(unittest.TestCase):
             ev.addon_folder(self.addons)
 
     def test_an_old_devsmoke_checkout_fails_before_writing_an_inbox(self):
-        (self.addon / "Core.lua").write_text("local captureFlow = function() end\n")
-        with self.assertRaisesRegex(ev.EvalError, "older .* capture protocol"):
+        (self.addon / "Core.lua").write_text("-- DevSmokeCaptureProtocol = 1\n")
+        with self.assertRaisesRegex(ev.EvalError, "does not provide capture protocol 1"):
             ev.write_snippet(self.snippet, self.addons)
         self.assertFalse((self.addon / "!!DevSmokeInbox").exists())
         self.assertFalse((self.addons / "!!DevSmokeInbox").exists())
