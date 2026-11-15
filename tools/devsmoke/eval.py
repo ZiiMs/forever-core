@@ -102,10 +102,10 @@ def addon_folder(addons: Path) -> Path:
     if not any((parent / ".git").exists() for parent in (target, *target.parents)):
         raise EvalError(f"{target} is not inside a git checkout: eval refuses to leave a snippet there")
     try:
-        core = (target / "Core.lua").read_text(encoding="utf-8", errors="replace")
+        metadata = toc.read_text(encoding="utf-8", errors="replace")
     except OSError as error:
         raise EvalError(f"{target} has no readable capture protocol: {error}") from None
-    protocol = re.search(r"(?m)^DevSmokeCaptureProtocol\s*=\s*(\d+)\s*$", core)
+    protocol = re.search(r"(?m)^## X-DevSmoke-Capture-Protocol:\s*(\d+)\s*$", metadata)
     if not protocol or int(protocol.group(1)) != CAPTURE_PROTOCOL:
         raise EvalError(
             f"{link} does not provide capture protocol {CAPTURE_PROTOCOL}; "

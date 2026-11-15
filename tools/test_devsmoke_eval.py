@@ -26,8 +26,8 @@ class DevSmokeEvalTest(unittest.TestCase):
         self.addon = self.checkout / "tools/devsmoke/!!DevSmoke"
         self.addon.mkdir(parents=True)
         (self.checkout / ".git").mkdir()
-        (self.addon / "!!DevSmoke.toc").write_text("## Interface: 16001\n## Title: Dev Smoke\nCore.lua\n")
-        (self.addon / "Core.lua").write_text("DevSmokeCaptureProtocol = 1\n")
+        (self.addon / "!!DevSmoke.toc").write_text("## Interface: 16001\n## Title: Dev Smoke\n## X-DevSmoke-Capture-Protocol: 1\nCore.lua\n")
+        (self.addon / "Core.lua").write_text("")
         (self.addons / "!!DevSmoke").symlink_to(self.addon)
         self.snippet = self.root / "probe.lua"
         self.snippet.write_text('print("hi")\nreturn 42\n')
@@ -145,7 +145,7 @@ class DevSmokeEvalTest(unittest.TestCase):
             ev.addon_folder(self.addons)
 
     def test_an_old_devsmoke_checkout_fails_before_writing_an_inbox(self):
-        (self.addon / "Core.lua").write_text("-- DevSmokeCaptureProtocol = 1\n")
+        (self.addon / "!!DevSmoke.toc").write_text("## Interface: 16001\n## Title: Dev Smoke\nCore.lua\n")
         with self.assertRaisesRegex(ev.EvalError, "does not provide capture protocol 1"):
             ev.write_snippet(self.snippet, self.addons)
         self.assertFalse((self.addon / "!!DevSmokeInbox").exists())
