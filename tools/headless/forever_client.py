@@ -303,6 +303,41 @@ def client_pid() -> int | None:
     return next((p for p in pids() if "Wow.exe" in cmdline(p) and in_prefix(read_environ(p))), None)
 
 
+def character_config(launch: Mapping) -> dict[str, str | bool]:
+    """Validate the owner-approved parked character before starting any client process."""
+    character = launch.get("character")
+    if not isinstance(character, dict):
+        raise ClientError(
+            f"{CONFIG} has no approved character: add character.name, character.guid and character.require_resting=true"
+        )
+    name, guid = character.get("name"), character.get("guid")
+    if not isinstance(name, str) or not name.strip() or not isinstance(guid, str) or not guid.strip():
+        raise ClientError(f"{CONFIG} has an invalid character identity: name and guid are required")
+    if character.get("require_resting") is not True:
+        raise ClientError(f"{CONFIG} must set character.require_resting=true for automatic proofs")
+    return {"name": name, "guid": guid, "require_resting": True}
+
+
+def prepare_headless_addon(character: Mapping[str, str | bool]) -> Path:
+    """Create an isolated headless addon copy with immutable session configuration."""
+    target = STATE_DIR / "headless-addon"
+    if target.exists() or target.is_symlink():
+        raise ClientError(f"{target} is left over from an earlier session: recover it before starting")
+    shutil.copytree(ADDON, target)
+    (target / "Config.lua").write_text(
+        "FOREVER_HEADLESS_CHARACTER = {name="
+        + json.dumps(character["name"])
+        + ", guid="
+        + json.dumps(character["guid"])
+        + ", require_resting=true}\n",
+        encoding="utf-8",
+    )
+    toc = target / "!!ForeverHeadless.toc"
+    text = toc.read_text(encoding="utf-8")
+    toc.write_text(text.replace("ForeverHeadless.lua\n", "Config.lua\nForeverHeadless.lua\n"), encoding="utf-8")
+    return target
+
+
 # --- session state ---------------------------------------------------------------------------------------------
 
 
@@ -1926,6 +1961,10 @@ def teardown(
     stop_gamescope(gamescope, state)
     if link and link.is_symlink():
         link.unlink()
+    if state and state.get("headless_addon"):
+        generated = Path(state["headless_addon"])
+        if generated.is_dir() and generated.parent == STATE_DIR:
+            shutil.rmtree(generated)
     state_file().unlink(missing_ok=True)
 
 
@@ -2028,9 +2067,11 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
             f"{CONFIG} records an older Wine launch: start Battle.net from Faugus, "
             "then run `forever_client.py capture-env`"
         )
+    character = character_config(launch)
     wine = launch["env"]
 
     link = CLIENT / "Interface/AddOns" / ADDON.name
+    session_addon: Path | None = None
     gamescope: subprocess.Popen | int | None = None
     state: dict | None = None
     stop = {"signal": None}
@@ -2046,8 +2087,9 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
     signal.alarm(MAX_SESSION)
     log = open(STATE_DIR / "session.log", "w")
     try:
+        session_addon = prepare_headless_addon(character)
         if not link.exists():
-            link.symlink_to(ADDON)
+            link.symlink_to(session_addon)
         env = {k: v for k, v in os.environ.items() if k not in ("WAYLAND_DISPLAY", "DISPLAY", "WINEPREFIX")}
         env.update(wine)
         env["WINEPREFIX"] = str(PREFIX)
@@ -2071,6 +2113,7 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
             "manual_launcher": args.manual_launcher,
             "wine": {"PROTONPATH": wine["PROTONPATH"]} if wine.get("PROTONPATH") else {},
             "link": str(link),
+            "headless_addon": str(session_addon),
         }
         state_file().write_text(json.dumps(state))
         gamescope = subprocess.Popen(
@@ -2133,6 +2176,8 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
         try:
             teardown(gamescope, wine, link, state)
         finally:
+            if session_addon and session_addon.is_dir() and session_addon.parent == STATE_DIR:
+                shutil.rmtree(session_addon)
             # Release the session lock before an exception reaches proof()/smoke(). Their error classifier probes
             # the lock to distinguish a foreign session, and a traceback retaining this frame must not see our own
             # failed startup as another owner (#573).

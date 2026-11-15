@@ -1,7 +1,7 @@
 -- Lua 5.1 fixtures for the startup handshake. A missing parked-character configuration must never signal readiness.
 local source = assert(io.open("tools/headless/!!ForeverHeadless/ForeverHeadless.lua")):read("*a")
 
-local function run(name, guid, map, x, y, screenshot)
+local function run(config, name, guid, resting, dead, combat, lockdown, screenshot)
 	local events, callback = {}, nil
 	_G.CreateFrame = function()
 		return {
@@ -25,16 +25,17 @@ local function run(name, guid, map, x, y, screenshot)
 		return guid
 	end
 	_G.UnitIsDeadOrGhost = function()
-		return false
+		return dead
 	end
 	_G.UnitAffectingCombat = function()
-		return false
+		return combat
 	end
 	_G.InCombatLockdown = function()
-		return false
+		return lockdown
 	end
-	_G.UnitPosition = function()
-		return map, x, y
+	_G.FOREVER_HEADLESS_CHARACTER = config
+	_G.IsResting = function()
+		return resting
 	end
 	_G.ChatEdit_GetActiveWindow = function()
 		return nil
@@ -49,6 +50,72 @@ local function run(name, guid, map, x, y, screenshot)
 end
 
 local screenshot = { count = 0 }
-run("Tester", "Player-1-2-3", 0, 1, 1, screenshot)
+run(nil, "Tester", "Player-1-2-3", true, false, false, false, screenshot)
 assert(screenshot.count == 0, "missing parked-character configuration refuses readiness")
-print("forever headless: missing parked character refuses readiness")
+run(
+	{ name = "Tester", guid = "Player-1-2-3", require_resting = true },
+	"Tester",
+	"Player-1-2-3",
+	true,
+	false,
+	false,
+	false,
+	screenshot
+)
+assert(screenshot.count == 1, "approved resting character signals readiness")
+run(
+	{ name = "Other", guid = "Player-1-2-3", require_resting = true },
+	"Tester",
+	"Player-1-2-3",
+	true,
+	false,
+	false,
+	false,
+	screenshot
+)
+assert(screenshot.count == 1, "unexpected identity refuses readiness")
+run(
+	{ name = "Tester", guid = "Player-1-2-3", require_resting = true },
+	"Tester",
+	"Player-1-2-3",
+	false,
+	false,
+	false,
+	false,
+	screenshot
+)
+assert(screenshot.count == 1, "unresting character refuses readiness")
+run(
+	{ name = "Tester", guid = "Player-1-2-3", require_resting = true },
+	"Tester",
+	"Player-1-2-3",
+	true,
+	true,
+	false,
+	false,
+	screenshot
+)
+assert(screenshot.count == 1, "dead character refuses readiness")
+run(
+	{ name = "Tester", guid = "Player-1-2-3", require_resting = true },
+	"Tester",
+	"Player-1-2-3",
+	true,
+	false,
+	true,
+	false,
+	screenshot
+)
+assert(screenshot.count == 1, "combat character refuses readiness")
+run(
+	{ name = "Tester", guid = "Player-1-2-3", require_resting = true },
+	"Tester",
+	"Player-1-2-3",
+	true,
+	false,
+	false,
+	true,
+	screenshot
+)
+assert(screenshot.count == 1, "lockdown character refuses readiness")
+print("forever headless: identity and resting handshake pass")

@@ -168,7 +168,7 @@ class ForeverClientTest(unittest.TestCase):
 
     def test_up_releases_its_lock_before_reporting_a_startup_failure(self):
         config = self.state / "env.json"
-        config.write_text('{"umu_run":"/faugus/umu-run","env":{"PROTONPATH":"/runner"}}')
+        config.write_text('{"umu_run":"/faugus/umu-run","env":{"PROTONPATH":"/runner"},"character":{"name":"Tester","guid":"Player-1","require_resting":true}}')
         client = self.state / "client"
         (client / "Interface/AddOns").mkdir(parents=True)
         with (
@@ -195,7 +195,7 @@ class ForeverClientTest(unittest.TestCase):
         config = self.state / "env.json"
         config.write_text(
             '{"umu_run":"/faugus/umu-run","env":{"PROTONPATH":"/runner","GAMEID":"umu-x","DISPLAY":":host",'
-            '"WAYLAND_DISPLAY":"host","XDG_RUNTIME_DIR":"/stale/runtime"}}'
+            '"WAYLAND_DISPLAY":"host","XDG_RUNTIME_DIR":"/stale/runtime"},"character":{"name":"Tester","guid":"Player-1","require_resting":true}}'
         )
         client = self.state / "client"
         (client / "Interface/AddOns").mkdir(parents=True)
@@ -248,7 +248,7 @@ class ForeverClientTest(unittest.TestCase):
 
     def test_an_interrupt_right_after_spawn_still_gives_teardown_the_session_token(self):
         config = self.state / "env.json"
-        config.write_text('{"umu_run":"/faugus/umu-run","env":{"PROTONPATH":"/runner"}}')
+        config.write_text('{"umu_run":"/faugus/umu-run","env":{"PROTONPATH":"/runner"},"character":{"name":"Tester","guid":"Player-1","require_resting":true}}')
         client = self.state / "client"
         (client / "Interface/AddOns").mkdir(parents=True)
 

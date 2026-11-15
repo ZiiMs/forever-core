@@ -1,8 +1,7 @@
 -- Dev addon for tools/headless/forever_client.py. The launcher links this folder into AddOns only for its own session
 -- and removes it on stop, so a player's login never loads it.
--- The expected parked character is deliberately configured only after the owner confirms a safe character.  A missing
--- expectation refuses an automatic proof instead of treating an arbitrary living character as safe.
-local SAFE_CHARACTER = nil -- { name = "Barry", guid = "Player-...", map = 0, x = 0, y = 0 }
+-- Config.lua is generated into an isolated session copy before the client starts. A missing config refuses readiness.
+local SAFE_CHARACTER = _G.FOREVER_HEADLESS_CHARACTER
 
 local function safeCharacter()
 	if type(SAFE_CHARACTER) ~= "table" then
@@ -25,15 +24,13 @@ local function safeCharacter()
 	if type(InCombatLockdown()) ~= "boolean" or InCombatLockdown() then
 		return false, "combat lockdown is active"
 	end
-	if type(UnitPosition) ~= "function" then
-		return false, "player position unavailable"
-	end
-	local map, x, y = UnitPosition("player")
-	if map ~= SAFE_CHARACTER.map or type(x) ~= "number" or type(y) ~= "number" then
-		return false, "unexpected player position"
-	end
-	if math.abs(x - SAFE_CHARACTER.x) > 0.001 or math.abs(y - SAFE_CHARACTER.y) > 0.001 then
-		return false, "player is not at the parked position"
+	if SAFE_CHARACTER.require_resting then
+		if type(IsResting) ~= "function" or type(IsResting()) ~= "boolean" then
+			return false, "resting state unavailable"
+		end
+		if not IsResting() then
+			return false, "player is not resting at the approved park spot"
+		end
 	end
 	return true, realm or ""
 end
