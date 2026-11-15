@@ -370,7 +370,17 @@ def wait_for_world(before: set[Path], timeout: float, nudge=None, *, require_mar
     while time.monotonic() < deadline:
         new = screenshots() - before
         if new:
-            candidates = [path for path in new if not require_marker or (path.is_file() and has_headless_marker(path))]
+            candidates = []
+            for path in new:
+                if not require_marker:
+                    candidates.append(path)
+                    continue
+                try:
+                    if path.is_file() and has_headless_marker(path):
+                        candidates.append(path)
+                except ClientError:
+                    # Screenshot() can expose the file before its final PNG chunk; retry on the next poll.
+                    continue
             if candidates:
                 return max(candidates, key=lambda p: p.stat().st_mtime)
         if nudge and time.monotonic() >= next_nudge:
