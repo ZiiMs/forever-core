@@ -722,6 +722,8 @@ def png_pixels(path: Path) -> tuple[int, int, int, list[bytes]]:
 
 def has_headless_marker(path: Path) -> bool:
     """Identify the readiness screenshot by the marker drawn by !!ForeverHeadless at screen center."""
+    if not _complete_png(path):
+        raise ClientError(f"{path} is not a complete PNG screenshot")
     width, height, channels, rows = png_pixels(path)
     if channels not in (3, 4) or width < 8 or height < 8:
         return False

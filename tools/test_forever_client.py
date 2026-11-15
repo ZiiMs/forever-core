@@ -11,10 +11,12 @@ import json
 import os
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -85,6 +87,26 @@ class ForeverClientTest(unittest.TestCase):
             with self.assertRaises(fc.ClientError):
                 fc.prepare_headless_addon({"name": "Bad\x00", "guid": "Player-1", "require_resting": True})
         self.assertFalse((self.state / "headless-addon").exists())
+
+    def test_readiness_marker_requires_exact_pixels_and_complete_png(self):
+        def png(rgb):
+            raw = b"".join(b"\0" + bytes(rgb) * 8 for _ in range(8))
+
+            def chunk(kind, payload):
+                return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+
+            return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+        marker = self.state / "marker.png"
+        marker.write_bytes(png((31, 239, 117)))
+        self.assertTrue(fc.has_headless_marker(marker))
+        plain = self.state / "plain.png"
+        plain.write_bytes(png((0, 0, 0)))
+        self.assertFalse(fc.has_headless_marker(plain))
+        partial = self.state / "partial.png"
+        partial.write_bytes(marker.read_bytes()[:-4])
+        with self.assertRaises(fc.ClientError):
+            fc.has_headless_marker(partial)
 
     def test_runtime_directory_fallback_is_existing_owned_private_directory(self):
         root = self.state / "users"
