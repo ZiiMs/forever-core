@@ -2,15 +2,26 @@
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-11-15
+
 - **Quest headings keep their own quests.** On-map class and zone quests stay under their quest-log headings as distances change. (#177)
 
 - **Forever tracker sections follow Kaliel's Tracker.** They sit below its visible quest list and follow its font and collapse controls. Thanks to kowakowa93 for the contribution (#602).
 - **Tracker rows keep their full width and quest item art.** Long headers fit the section width, and scrolling leaves room for quest markers and item buttons. Thanks to xh43k for the report (#603).
 
-- Embedded core copies retain shared settings and histories across host removal, thanks to cotijelucie for the report.
-  Consumer packaging must adopt embedded copies before installations use this runtime path. (#448)
 - **The journey marker's diamond sits in the centre of its ring.** Its placement now preserves the half-pixel
   position needed to centre the artwork without shifting it left or right. (#611)
+
+### For addon authors
+
+- **The embedded-core loader is ready for consumer packaging work.** Consumer packaging must adopt the embedded
+  copies before an installation can use this runtime path; this release does not change existing consumer packages.
+  (#448)
+- **Developer profession proof flows open securely.** `/devsmoke prof` offers a visible secure Cooking opener and
+  selects the requested tab after the window opens, without calling a protected API from chat. (#613)
+- **Proof startup failures keep their real cause.** A failed client startup no longer holds its own session lock while
+  the proof classifies the error as another session, so authentication and timeout failures remain distinguishable.
+  (#573)
 
 ## [1.12.1] - 2026-11-14
 
