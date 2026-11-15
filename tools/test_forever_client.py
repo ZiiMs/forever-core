@@ -64,6 +64,18 @@ class ForeverClientTest(unittest.TestCase):
         self.real_nvidia_mismatch = fc.nvidia_mismatch
         self.enterContext(mock.patch.object(fc, "nvidia_mismatch", return_value=None))
 
+    def test_character_config_requires_explicit_identity_and_resting(self):
+        valid = {"character": {"name": "Barry", "guid": "Player-1", "require_resting": True}}
+        self.assertEqual(fc.character_config(valid)["guid"], "Player-1")
+        for value in ({}, {"character": {}}, {"character": {"name": "Barry", "guid": "Player-1"}}):
+            with self.assertRaises(fc.ClientError):
+                fc.character_config(value)
+
+    def test_lua_string_preserves_unicode_quotes_and_backslashes(self):
+        self.assertEqual(fc.lua_string('Hé said "hi" \\'), '"Hé said \\"hi\\" \\\\"')
+        with self.assertRaises(fc.ClientError):
+            fc.lua_string("Barry\x00")
+
     def test_runtime_directory_fallback_is_existing_owned_private_directory(self):
         root = self.state / "users"
         root.mkdir()

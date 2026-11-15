@@ -46,10 +46,20 @@ frame:SetScript("OnEvent", function()
 			print("FOREVER_HEADLESS_PREFLIGHT_REFUSED", reason)
 			return
 		end
+		local marker = CreateFrame("Frame", nil, UIParent)
+		marker:SetSize(8, 8)
+		marker:SetPoint("CENTER")
+		local texture = marker:CreateTexture(nil, "OVERLAY")
+		texture:SetAllPoints()
+		texture:SetColorTexture(31 / 255, 239 / 255, 117 / 255, 1)
 		local box = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
 		if box then
 			ChatEdit_DeactivateChat(box)
 		end
 		Screenshot()
+		C_Timer.After(0.5, function()
+			marker:Hide()
+			marker = nil
+		end)
 	end)
 end)

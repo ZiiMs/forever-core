@@ -318,6 +318,13 @@ def character_config(launch: Mapping) -> dict[str, str | bool]:
     return {"name": name, "guid": guid, "require_resting": True}
 
 
+def lua_string(value: str) -> str:
+    """Encode a character field as a Lua 5.1 quoted string without control escapes or lossy Unicode."""
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise ClientError(f"{CONFIG} character identity contains a control character")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+
+
 def prepare_headless_addon(character: Mapping[str, str | bool]) -> Path:
     """Create an isolated headless addon copy with immutable session configuration."""
     target = STATE_DIR / "headless-addon"
@@ -326,9 +333,9 @@ def prepare_headless_addon(character: Mapping[str, str | bool]) -> Path:
     shutil.copytree(ADDON, target)
     (target / "Config.lua").write_text(
         "FOREVER_HEADLESS_CHARACTER = {name="
-        + json.dumps(character["name"])
+        + lua_string(str(character["name"]))
         + ", guid="
-        + json.dumps(character["guid"])
+        + lua_string(str(character["guid"]))
         + ", require_resting=true}\n",
         encoding="utf-8",
     )
@@ -357,13 +364,15 @@ def screenshots() -> set[Path]:
     return set(folder.glob("*")) if folder.is_dir() else set()
 
 
-def wait_for_world(before: set[Path], timeout: float, nudge=None) -> Path:
+def wait_for_world(before: set[Path], timeout: float, nudge=None, *, require_marker: bool = False) -> Path:
     """Block until the dev addon's screenshot appears: the world has loaded. `nudge` runs every 15 s meanwhile."""
     deadline, next_nudge = time.monotonic() + timeout, time.monotonic() + 20
     while time.monotonic() < deadline:
         new = screenshots() - before
         if new:
-            return max(new, key=lambda p: p.stat().st_mtime)
+            candidates = [path for path in new if not require_marker or (path.is_file() and has_headless_marker(path))]
+            if candidates:
+                return max(candidates, key=lambda p: p.stat().st_mtime)
         if nudge and time.monotonic() >= next_nudge:
             nudge()
             next_nudge = time.monotonic() + 15
@@ -694,6 +703,20 @@ def png_pixels(path: Path) -> tuple[int, int, int, list[bytes]]:
     except (IndexError, ValueError) as error:
         raise ClientError(f"{path} is a truncated PNG: {error}") from None
     return width, height, channels, rows
+
+
+def has_headless_marker(path: Path) -> bool:
+    """Identify the readiness screenshot by the marker drawn by !!ForeverHeadless at screen center."""
+    width, height, channels, rows = png_pixels(path)
+    if channels not in (3, 4) or width < 8 or height < 8:
+        return False
+    left, top = width // 2 - 4, height // 2 - 4
+    expected = bytes((31, 239, 117))
+    for row in rows[top : top + 8]:
+        for x in range(left, left + 8):
+            if row[x * channels : x * channels + 3] != expected:
+                return False
+    return True
 
 
 def png_unfilter(line: bytearray, previous: bytes, channels: int, kind: int) -> None:
@@ -2156,7 +2179,7 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
 
         nudge = functools.partial(at_character_select, state, args.manual_launcher)
         try:
-            ready = wait_for_world(before, min(args.timeout, MAX_SESSION), nudge=nudge)
+            ready = wait_for_world(before, min(args.timeout, MAX_SESSION), nudge=nudge, require_marker=True)
         except ClientError as error:
             frame = shot(state, STATE_DIR / "failed.png")
             raise ClientError(f"{error}; last frame: {frame}") from None

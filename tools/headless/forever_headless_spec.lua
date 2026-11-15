@@ -11,6 +11,12 @@ local function run(config, name, guid, resting, dead, combat, lockdown, screensh
 			SetScript = function(_, _, fn)
 				callback = fn
 			end,
+			SetSize = function() end,
+			SetPoint = function() end,
+			Hide = function() end,
+			CreateTexture = function()
+				return { SetAllPoints = function() end, SetColorTexture = function() end }
+			end,
 		}
 	end
 	_G.C_Timer = {
