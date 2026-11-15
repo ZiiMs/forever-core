@@ -2059,7 +2059,14 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
         signal.alarm(0)
         for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGALRM):
             signal.signal(signum, signal.SIG_IGN)
-        teardown(gamescope, wine, link, state)
+        try:
+            teardown(gamescope, wine, link, state)
+        finally:
+            # Release the session lock before an exception reaches proof()/smoke(). Their error classifier probes
+            # the lock to distinguish a foreign session, and a traceback retaining this frame must not see our own
+            # failed startup as another owner (#573).
+            lock.close()
+            log.close()
         print("stopped: logged out, gamescope, Wine and the dev addon link are gone", flush=True)
 
 

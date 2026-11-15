@@ -166,6 +166,31 @@ class ForeverClientTest(unittest.TestCase):
         connect.assert_not_called()
         spawn.assert_not_called()
 
+    def test_up_releases_its_lock_before_reporting_a_startup_failure(self):
+        config = self.state / "env.json"
+        config.write_text('{"umu_run":"/faugus/umu-run","env":{"PROTONPATH":"/runner"}}')
+        client = self.state / "client"
+        (client / "Interface/AddOns").mkdir(parents=True)
+        with (
+            mock.patch.object(fc, "CONFIG", config),
+            mock.patch.object(fc, "CLIENT", client),
+            mock.patch.object(fc, "prefix_users", return_value=[]),
+            mock.patch.object(fc.socket, "create_connection"),
+            mock.patch.object(fc.signal, "signal"),
+            mock.patch.object(fc.signal, "alarm"),
+            mock.patch.object(fc, "screenshots", return_value=set()),
+            mock.patch.object(fc, "child_env", return_value={"DISPLAY": ":3", "GAMESCOPE_WAYLAND_DISPLAY": "private"}),
+            mock.patch.object(fc, "wait_for_world", side_effect=fc.ClientError("startup timed out")),
+            mock.patch.object(fc, "shot", return_value=Path("failed.png")),
+            mock.patch.object(fc, "teardown"),
+            mock.patch.object(fc.subprocess, "Popen") as spawn,
+        ):
+            spawn.return_value.pid = 123
+            with self.assertRaisesRegex(fc.ClientError, "startup timed out"):
+                fc.up(args())
+        with mock.patch.object(fc, "prefix_users", return_value=[]):
+            self.assertIsNone(fc.client_in_use())
+
     def test_up_records_runtime_and_keeps_gamescope_off_host_display(self):
         config = self.state / "env.json"
         config.write_text(
