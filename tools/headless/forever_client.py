@@ -93,6 +93,8 @@ import zlib
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
+from PIL import Image
+
 # The workspace checkout of each addon repository, and the test builds beside it: the same places the workspace's
 # rebuild-dev.sh used, now built here so a build has one implementation.
 WORKSPACE = Path.home() / "drive/proj/wow"
@@ -721,19 +723,29 @@ def png_pixels(path: Path) -> tuple[int, int, int, list[bytes]]:
 
 
 def has_headless_marker(path: Path) -> bool:
-    """Identify the readiness screenshot by the marker drawn by !!ForeverHeadless at screen center."""
-    if not _complete_png(path):
-        raise ClientError(f"{path} is not a complete PNG screenshot")
-    width, height, channels, rows = png_pixels(path)
-    if channels not in (3, 4) or width < 8 or height < 8:
+    """Identify the readiness screenshot by the marker drawn at screen center.
+
+    ``Screenshot()`` writes JPEGs on the game client, while gamescope writes PNGs
+    for host captures. Decode both formats here so the handshake follows the
+    native client transport instead of assuming the host capture format.
+    """
+    try:
+        if path.read_bytes()[:8] == PNG_SIGNATURE and not _complete_png(path):
+            raise ClientError(f"{path} is not a complete screenshot")
+        with Image.open(path) as image:
+            image.load()
+            rgb = image.convert("RGB")
+            width, height = rgb.size
+            pixels = list(rgb.crop((width // 2 - 4, height // 2 - 4, width // 2 + 4, height // 2 + 4)).getdata())
+    except ClientError:
+        raise
+    except (OSError, ValueError) as error:
+        raise ClientError(f"{path} is not a complete screenshot: {error}") from None
+    if width < 8 or height < 8:
         return False
-    left, top = width // 2 - 4, height // 2 - 4
-    expected = bytes((31, 239, 117))
-    for row in rows[top : top + 8]:
-        for x in range(left, left + 8):
-            if row[x * channels : x * channels + 3] != expected:
-                return False
-    return True
+    # JPEG quantisation shifts the exact UI colour, so require every marker
+    # pixel to remain recognisably green rather than matching one byte triplet.
+    return all(g >= 150 and g > r * 1.8 and g > b * 1.3 for r, g, b in pixels)
 
 
 def png_unfilter(line: bytearray, previous: bytes, channels: int, kind: int) -> None:

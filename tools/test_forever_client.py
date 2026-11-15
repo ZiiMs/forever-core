@@ -20,6 +20,8 @@ import zlib
 from pathlib import Path
 from unittest import mock
 
+from PIL import Image
+
 SPEC = importlib.util.spec_from_file_location("forever_client", Path(__file__).parent / "headless/forever_client.py")
 fc = importlib.util.module_from_spec(SPEC)
 sys.modules["forever_client"] = fc
@@ -88,7 +90,7 @@ class ForeverClientTest(unittest.TestCase):
                 fc.prepare_headless_addon({"name": "Bad\x00", "guid": "Player-1", "require_resting": True})
         self.assertFalse((self.state / "headless-addon").exists())
 
-    def test_readiness_marker_requires_exact_pixels_and_complete_png(self):
+    def test_readiness_marker_accepts_native_jpeg_and_rejects_incomplete_png(self):
         def png(rgb):
             raw = b"".join(b"\0" + bytes(rgb) * 8 for _ in range(8))
 
@@ -106,6 +108,16 @@ class ForeverClientTest(unittest.TestCase):
         plain = self.state / "plain.png"
         plain.write_bytes(png((0, 0, 0)))
         self.assertFalse(fc.has_headless_marker(plain))
+        jpeg = self.state / "marker.jpg"
+        image = Image.new("RGB", (64, 64), (0, 0, 0))
+        for x in range(28, 36):
+            for y in range(28, 36):
+                image.putpixel((x, y), (31, 239, 117))
+        image.save(jpeg, format="JPEG", quality=95)
+        self.assertTrue(fc.has_headless_marker(jpeg))
+        jpeg_plain = self.state / "plain.jpg"
+        Image.new("RGB", (64, 64), (0, 0, 0)).save(jpeg_plain, format="JPEG", quality=95)
+        self.assertFalse(fc.has_headless_marker(jpeg_plain))
         partial = self.state / "partial.png"
         partial.write_bytes(marker.read_bytes()[:-4])
         with self.assertRaises(fc.ClientError):
@@ -269,7 +281,8 @@ class ForeverClientTest(unittest.TestCase):
         ):
             spawn.return_value.pid = 123
 
-            def waiting(*unused, nudge):
+            def waiting(*unused, nudge, require_marker):
+                self.assertTrue(require_marker)
                 nudge()
                 press_play.assert_not_called()
                 client_pid.return_value = 456
