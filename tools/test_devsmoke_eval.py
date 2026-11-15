@@ -26,7 +26,9 @@ class DevSmokeEvalTest(unittest.TestCase):
         self.addon = self.checkout / "tools/devsmoke/!!DevSmoke"
         self.addon.mkdir(parents=True)
         (self.checkout / ".git").mkdir()
-        (self.addon / "!!DevSmoke.toc").write_text("## Interface: 16001\n## Title: Dev Smoke\n## X-DevSmoke-Capture-Protocol: 1\nCore.lua\n")
+        (self.addon / "!!DevSmoke.toc").write_text(
+            "## Interface: 16001\n## Title: Dev Smoke\n## X-DevSmoke-Capture-Protocol: 1\nCore.lua\n"
+        )
         (self.addon / "Core.lua").write_text("")
         (self.addons / "!!DevSmoke").symlink_to(self.addon)
         self.snippet = self.root / "probe.lua"
