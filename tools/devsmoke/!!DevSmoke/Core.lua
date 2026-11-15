@@ -611,6 +611,9 @@ local function SelectPendingProfession()
 		local tab = pendingProfession
 		pendingProfession = nil
 		ForeverCore.ProfessionTabs.Select(tab)
+		if professionOpener then
+			professionOpener:Hide()
+		end
 	end
 end
 

@@ -700,6 +700,7 @@ equal(professionButton.width, 220, "the opener is visible at a useful size")
 professionWindow.shown = true
 	professionButton.hooks.OnClick()
 equal(selectedProfession, "cooking", "the deferred tab is selected after the click")
+equal(professionButton.shown, false, "the opener hides after the profession window opens")
 equal(profLines[1], "Dev Smoke: click the Cooking button to open the profession window", "the command asks for a click")
 command("prof alchemy")
 equal(#openedSkills, 0, "an open profession window is kept")
