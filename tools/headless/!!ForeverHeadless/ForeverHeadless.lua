@@ -2,10 +2,16 @@
 -- and removes it on stop, so a player's login never loads it.
 -- Config.lua is generated into an isolated session copy before the client starts. A missing config refuses readiness.
 local SAFE_CHARACTER = _G.FOREVER_HEADLESS_CHARACTER
+local UnitGUID = _G.UnitGUID
+local UnitAffectingCombat = _G.UnitAffectingCombat
+local IsResting = _G.IsResting
 
 local function safeCharacter()
 	if type(SAFE_CHARACTER) ~= "table" then
 		return false, "no safe parked character configured"
+	end
+	if type(UnitGUID) ~= "function" or type(UnitAffectingCombat) ~= "function" then
+		return false, "player identity or combat API unavailable"
 	end
 	local name, realm = UnitName("player")
 	local guid = UnitGUID("player")
