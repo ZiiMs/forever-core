@@ -746,10 +746,10 @@ def write_ppm(path: Path, rows: Sequence[bytes], channels: int, box: tuple[int, 
     path.write_bytes(data)
 
 
-def ocr_words(image: Path) -> list[tuple[str, float, int, int, int, int]]:
+def ocr_words(image: Path, psm: int = 11) -> list[tuple[str, float, int, int, int, int]]:
     """The words tesseract reads in one image: text, confidence, and the word's box in that image."""
     ocr = subprocess.run(
-        ["tesseract", str(image), "stdout", "--psm", "11", "tsv"],
+        ["tesseract", str(image), "stdout", "--psm", str(psm), "tsv"],
         capture_output=True,
         text=True,
         check=False,
@@ -832,7 +832,11 @@ def press_play(state: dict) -> None:
 
 def enter_world_targets(image: Path) -> list[tuple[int, int, int, int, float]]:
     """Find the visible Enter World label in a character-select screenshot."""
-    words = [word for word in ocr_words(image) if word[1] >= 0 and word[0].casefold() in {"enter", "world"}]
+    words = [word for word in ocr_words(image, psm=6) if word[1] >= 0]
+    combined = [word for word in words if word[0].casefold().replace(" ", "") == "enterworld"]
+    if len(combined) == 1:
+        return combined
+    words = [word for word in words if word[0].casefold() in {"enter", "world"}]
     targets = []
     for enter in words:
         for world in words:
