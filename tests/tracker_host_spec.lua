@@ -317,4 +317,11 @@ scroll.check(capped.scrollFrame:GetVerticalScroll() == 0, "the scroll child retu
 scroll.check(capped.scrollBar:IsShown() == false, "the shrunken list hides the bar")
 scroll.check(capped.scrollChanges > scrollChanges, "the shrunken list redraws its item buttons")
 
+-- Two visible sections with little room reserve their measured floors without allowing the column to overrun it.
+scroll.native.NineSlice.bottom = 100
+scroll.host:MarkDirty()
+scroll.drain()
+scroll.check(capped.available > 0 and rest.available == 0, "constrained layout gives the remaining section no sliver")
+scroll.check(capped:GetHeight() + rest:GetHeight() <= 100, "constrained layout keeps section geometry within the room")
+
 print("tracker_host_spec: " .. (t.checks() + asideChecks + scroll.checks()) .. " checks passed")
