@@ -180,7 +180,6 @@ end
 -- and General stays clean. A line is kept under 255 characters because that is where the chat box cuts one.
 local MAX_CHAT_WINDOWS = NUM_CHAT_WINDOWS or 10
 local MAX_LINE = 254
-local COOKING_SKILL_LINE = 185
 
 local function trim(text)
 	return type(text) == "string" and text:match("^%s*(.-)%s*$") or ""
