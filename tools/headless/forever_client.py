@@ -2114,8 +2114,10 @@ def up(args: argparse.Namespace, after_ready=None) -> int:
         state["ready"] = time.time()
         state_file().write_text(json.dumps(state))
         print(f"READY in the world after {time.time() - started:.0f} s ({ready.name})", flush=True)
-        preflight_token = run_flow(state, str(CHARACTER_PREFLIGHT))
-        check_flow_eval(state, str(CHARACTER_PREFLIGHT), preflight_token)
+        # The preflight is itself a ready-gated flow.  run_flow waits for its capture, and a thrown
+        # check never produces that capture, so reading its SavedVariables would only force another
+        # reload before the caller's first proof.
+        run_flow(state, str(CHARACTER_PREFLIGHT))
         print("CHARACTER_PREFLIGHT passed", flush=True)
         if after_ready:
             return after_ready(state)

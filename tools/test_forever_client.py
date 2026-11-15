@@ -214,7 +214,6 @@ class ForeverClientTest(unittest.TestCase):
             mock.patch.object(fc, "enter_world") as enter_world,
             mock.patch.object(fc, "press_play") as press_play,
             mock.patch.object(fc, "run_flow", return_value="preflight-token") as run_flow,
-            mock.patch.object(fc, "check_flow_eval") as check_flow_eval,
             mock.patch.object(fc, "x") as x,
             mock.patch.object(fc, "teardown"),
             mock.patch.object(fc.subprocess, "Popen") as spawn,
@@ -236,7 +235,6 @@ class ForeverClientTest(unittest.TestCase):
             self.assertEqual(fc.up(options, after_ready=lambda state: state["runtime_dir"]), str(self.runtime))
             x.assert_not_called()
             run_flow.assert_called_once_with(mock.ANY, str(fc.CHARACTER_PREFLIGHT))
-            check_flow_eval.assert_called_once_with(mock.ANY, str(fc.CHARACTER_PREFLIGHT), "preflight-token")
         handled = {call.args[0] for call in install.call_args_list}
         self.assertEqual(handled, {fc.signal.SIGTERM, fc.signal.SIGHUP, fc.signal.SIGINT, fc.signal.SIGALRM})
         env = spawn.call_args.kwargs["env"]

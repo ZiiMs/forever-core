@@ -22,10 +22,37 @@ local function run(label, dead, combat, locked, succeeds)
 	assert(ok == succeeds, label .. " preflight result")
 end
 
+local function unknown(label, field)
+	_G.UnitName = function()
+		return "Tester", "Realm"
+	end
+	_G.UnitGUID = function()
+		return "Player-1-2-3"
+	end
+	_G.UnitIsDeadOrGhost = function()
+		return false
+	end
+	_G.UnitAffectingCombat = function()
+		return false
+	end
+	_G.InCombatLockdown = function()
+		return false
+	end
+	_G[field] = function()
+		return nil
+	end
+	local check = assert(loadfile(path))()
+	local ok = pcall(check)
+	assert(not ok, label .. " preflight result")
+end
+
 run("parked", false, false, false, true)
 run("dead", true, false, false, false)
 run("combat", false, true, false, false)
 run("lockdown", false, false, true, false)
+unknown("unknown dead state", "UnitIsDeadOrGhost")
+unknown("unknown combat state", "UnitAffectingCombat")
+unknown("unknown lockdown state", "InCombatLockdown")
 
 _G.UnitGUID = nil
 local ok = pcall(function()
