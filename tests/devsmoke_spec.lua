@@ -67,6 +67,10 @@ _G.CreateFrame = function(kind)
 	function frame:SetScript(script, handler)
 		self.scripts[script] = handler
 	end
+	function frame:HookScript(script, handler)
+		self.hooks = self.hooks or {}
+		self.hooks[script] = handler
+	end
 	function frame:SetAttribute(key, value)
 		self.attributes = self.attributes or {}
 		self.attributes[key] = value
@@ -694,7 +698,7 @@ equal(professionButton.attributes.type, "spell", "the opener is a secure spell b
 equal(professionButton.attributes.spell, "Cooking", "the opener casts the Cooking spell")
 equal(professionButton.width, 220, "the opener is visible at a useful size")
 professionWindow.shown = true
-professionButton.scripts.OnClick()
+	professionButton.hooks.OnClick()
 equal(selectedProfession, "cooking", "the deferred tab is selected after the click")
 equal(profLines[1], "Dev Smoke: click the Cooking button to open the profession window", "the command asks for a click")
 command("prof alchemy")

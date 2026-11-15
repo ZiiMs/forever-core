@@ -622,7 +622,7 @@ local function EnsureProfessionOpener()
 		return nil
 	end
 	local spellName = C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(2550) or "Cooking"
-	local button = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+	local button = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate,UIPanelButtonTemplate")
 	if type(button.SetAttribute) ~= "function" then
 		return nil
 	end
@@ -631,8 +631,8 @@ local function EnsureProfessionOpener()
 	button:SetSize(220, 32)
 	button:SetPoint("CENTER")
 	button:SetText("Open Cooking")
-	button:RegisterForClicks("LeftButtonUp")
-	button:SetScript("OnClick", SelectPendingProfession)
+	button:RegisterForClicks("AnyUp", "AnyDown")
+	button:HookScript("OnClick", SelectPendingProfession)
 	button:Hide()
 	professionOpener = button
 	professionEvents = CreateFrame("Frame")
