@@ -57,6 +57,16 @@ native:SetHeight(700)
 native.scripts.OnSizeChanged(native)
 drain()
 check(native:GetHeight() == 700, "native container keeps its externally sized height")
+
+-- A section created just before combat may reach Attach from its deferred timer after combat starts. SetParent is
+-- protected for the quest descendants, so the host keeps the request and applies it on the first safe event.
+local combatLate = t.env.CreateFrame("Frame")
+t.setCombat(true)
+t.ns.TrackerHost.Attach(combatLate)
+check(combatLate.parent == nil, "combat defers a late section attachment")
+t.setCombat(false)
+t.fire("PLAYER_REGEN_ENABLED")
+check(combatLate.parent == host, "combat release applies the deferred attachment")
 MoveNative("TOPRIGHT", parent, "TOPRIGHT", 0, 0)
 t.eventRegistry:TriggerEvent("EditMode.SavedLayouts")
 drain()

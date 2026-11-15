@@ -285,6 +285,7 @@ local function IsLocked()
 	return Settings().locked
 end
 local modules, queued = {}, false
+local pendingAttachments = {}
 local pools = CreateFramePoolCollection()
 
 local function NotifyAttachment(value)
@@ -1592,6 +1593,10 @@ ns.MigrateTrackerSettings = Migrate
 ---@param show? ForeverTrackerShowSetting the section's own show switch, when it has one
 function api.Attach(module, show, contract)
 	---@cast module ForeverTrackerModule
+	if InCombatLockdown() then
+		pendingAttachments[module] = { show = show, contract = contract }
+		return
+	end
 	if type(contract) == "table" and contract.menu and type(module.AddHeaderMenuEntries) == "function" then
 		RunSafe(module.safeCall, "tracker menu contract", function()
 			error("tracker menu contract cannot be combined with deprecated AddHeaderMenuEntries")
@@ -1665,6 +1670,12 @@ for _, event in ipairs({
 	host:RegisterEvent(event)
 end
 host:SetScript("OnEvent", function(_, event)
+	if event == "PLAYER_REGEN_ENABLED" then
+		for module, attachment in pairs(pendingAttachments) do
+			pendingAttachments[module] = nil
+			api.Attach(module, attachment.show, attachment.contract)
+		end
+	end
 	if event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
 		local frozen = event == "PLAYER_REGEN_DISABLED"
 		for _, module in ipairs(modules) do
