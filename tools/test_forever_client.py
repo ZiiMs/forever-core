@@ -93,9 +93,12 @@ class ForeverClientTest(unittest.TestCase):
             raw = b"".join(b"\0" + bytes(rgb) * 8 for _ in range(8))
 
             def chunk(kind, payload):
-                return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+                checksum = struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+                return struct.pack(">I", len(payload)) + kind + payload + checksum
 
-            return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+            header = chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0))
+            body = chunk(b"IDAT", zlib.compress(raw))
+            return b"\x89PNG\r\n\x1a\n" + header + body + chunk(b"IEND", b"")
 
         marker = self.state / "marker.png"
         marker.write_bytes(png((31, 239, 117)))
