@@ -671,23 +671,23 @@ class ForeverClientTest(unittest.TestCase):
         x.assert_not_called()
 
     def test_enter_world_targets_requires_adjacent_enter_and_world_words(self):
-        with mock.patch.object(
-            fc,
-            "ocr_words",
-            return_value=[
-                ("EnterWorld", 51.4, 896, 716, 127, 30),
-            ],
+        with (
+            mock.patch.object(fc, "png_pixels", return_value=(1, 1, 1, [b"\x00"])),
+            mock.patch.object(fc, "ocr_words_with_lines", return_value=[("EnterWorld", 51.4, 896, 716, 127, 30, 1001)]),
         ):
             self.assertEqual(fc.enter_world_targets(Path("frame.png")), [(896, 716, 127, 30, 51.4)])
 
     def test_enter_world_targets_fails_closed_on_ambiguous_exact_labels(self):
-        with mock.patch.object(
-            fc,
-            "ocr_words",
-            return_value=[
-                ("EnterWorld", 51.4, 896, 716, 127, 30),
-                ("EnterWorld", 51.4, 896, 600, 127, 30),
-            ],
+        with (
+            mock.patch.object(fc, "png_pixels", return_value=(1, 1, 1, [b"\x00"])),
+            mock.patch.object(
+                fc,
+                "ocr_words_with_lines",
+                return_value=[
+                    ("EnterWorld", 51.4, 896, 716, 127, 30, 1001),
+                    ("EnterWorld", 51.4, 896, 600, 127, 30, 1002),
+                ],
+            ),
         ):
             self.assertEqual(len(fc.enter_world_targets(Path("frame.png"))), 2)
 

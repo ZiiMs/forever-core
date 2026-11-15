@@ -746,6 +746,14 @@ def write_ppm(path: Path, rows: Sequence[bytes], channels: int, box: tuple[int, 
     path.write_bytes(data)
 
 
+def write_pgm_channel(path: Path, width: int, height: int, channels: int, rows: Sequence[bytes], channel: int) -> None:
+    """Write one PNG channel as grayscale for OCR of colored game labels."""
+    data = bytearray(f"P5\n{width} {height}\n255\n".encode())
+    for row in rows:
+        data.extend(255 - value for value in row[channel::channels])
+    path.write_bytes(data)
+
+
 def ocr_words(image: Path, psm: int = 11) -> list[tuple[str, float, int, int, int, int]]:
     """The words tesseract reads in one image: text, confidence, and the word's box in that image."""
     ocr = subprocess.run(
@@ -767,6 +775,31 @@ def ocr_words(image: Path, psm: int = 11) -> list[tuple[str, float, int, int, in
         except (TypeError, ValueError):
             continue
         words.append((fields[11].strip(), confidence, left, top, width, height))
+    return words
+
+
+def ocr_words_with_lines(image: Path, psm: int) -> list[tuple[str, float, int, int, int, int, int]]:
+    """Read OCR words with their TSV line number for exact multi-word labels."""
+    ocr = subprocess.run(
+        ["tesseract", str(image), "stdout", "--psm", str(psm), "tsv"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if ocr.returncode != 0:
+        raise ClientError(f"could not read {image} with tesseract: {ocr.stderr.strip()}")
+    words = []
+    for line in ocr.stdout.splitlines()[1:]:
+        fields = line.split("\t")
+        if len(fields) != 12:
+            continue
+        try:
+            block, paragraph, line_number = (int(fields[index]) for index in (2, 3, 4))
+            left, top, width, height = (int(fields[index]) for index in (6, 7, 8, 9))
+            confidence = float(fields[10])
+        except (TypeError, ValueError):
+            continue
+        words.append((fields[11].strip(), confidence, left, top, width, height, (block * 1000) + (paragraph * 100) + line_number))
     return words
 
 
@@ -832,9 +865,25 @@ def press_play(state: dict) -> None:
 
 def enter_world_targets(image: Path) -> list[tuple[int, int, int, int, float]]:
     """Find exact Enter World labels in a character-select screenshot."""
-    words = [word for word in ocr_words(image, psm=6) if word[1] >= 0]
+    width, height, channels, rows = png_pixels(image)
+    channel = STATE_DIR / "character-select-green.pgm"
+    write_pgm_channel(channel, width, height, channels, rows, 1)
+    words = [word for word in ocr_words_with_lines(channel, psm=6) if word[1] >= 0]
     combined = [word for word in words if word[0].casefold().replace(" ", "") == "enterworld"]
-    return [(word[2], word[3], word[4], word[5], word[1]) for word in combined]
+    targets = [(word[2], word[3], word[4], word[5], word[1]) for word in combined]
+    if targets:
+        return targets
+    for enter in words:
+        if enter[0].casefold() != "enter":
+            continue
+        for world in words:
+            if world[0].casefold() != "world" or world[6] != enter[6]:
+                continue
+            left, top = min(enter[2], world[2]), min(enter[3], world[3])
+            right = max(enter[2] + enter[4], world[2] + world[4])
+            bottom = max(enter[3] + enter[5], world[3] + world[5])
+            targets.append((left, top, right - left, bottom - top, min(enter[1], world[1])))
+    return list(dict.fromkeys(targets))
 
 
 def enter_world(state: Mapping) -> None:
