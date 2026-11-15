@@ -34,6 +34,7 @@ def find(text: str, version: str) -> str | None:
 
 
 def section(text: str, version: str) -> str:
+    _check_unique_headings(text)
     body = find(text, version)
     if body is None:
         known = ", ".join(m["version"] for m in HEADING.finditer(text)) or "none"

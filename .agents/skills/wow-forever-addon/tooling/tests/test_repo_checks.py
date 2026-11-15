@@ -31,6 +31,8 @@ class ChangelogTest(unittest.TestCase):
         duplicate_release = LOG + "\n## [1.0.0] - 2026-02-01\n- repeated\n"
         with self.assertRaisesRegex(SystemExit, "duplicate sections for 1.0.0"):
             changelog.check(duplicate_release, ["1.0.0"])
+        with self.assertRaisesRegex(SystemExit, "duplicate sections for 1.0.0"):
+            changelog.section(duplicate_release, "1.0.0")
         duplicate_unreleased = LOG.replace("## [Unreleased]\n", "## [Unreleased]\n\n## [Unreleased]\n")
         with self.assertRaisesRegex(SystemExit, "duplicate sections for Unreleased"):
             changelog.check(duplicate_unreleased, ["1.0.0"])
