@@ -365,7 +365,11 @@ _G.C_TradeSkillUI = {
 		professionWindow.shown = true
 	end,
 }
-_G.C_Spell = { GetSpellName = function(id) return id == 2550 and "Cooking" or nil end }
+_G.C_Spell = {
+	GetSpellName = function(id)
+		return id == 2550 and "Cooking" or nil
+	end,
+}
 
 local clock = 0
 _G.time = function()
@@ -698,7 +702,7 @@ equal(professionButton.attributes.type, "spell", "the opener is a secure spell b
 equal(professionButton.attributes.spell, "Cooking", "the opener casts the Cooking spell")
 equal(professionButton.width, 220, "the opener is visible at a useful size")
 professionWindow.shown = true
-	professionButton.hooks.OnClick()
+professionButton.hooks.OnClick()
 equal(selectedProfession, "cooking", "the deferred tab is selected after the click")
 equal(professionButton.shown, false, "the opener hides after the profession window opens")
 equal(profLines[1], "Dev Smoke: click the Cooking button to open the profession window", "the command asks for a click")
