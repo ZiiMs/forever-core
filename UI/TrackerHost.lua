@@ -644,6 +644,9 @@ local function BindTrackerWheel(frame, handler, seen)
 	end
 	local fresh = not seen[frame]
 	seen[frame] = true
+	if frame ~= handler.owner then
+		frame.trackerWheelModule = handler.module
+	end
 	if fresh and frame ~= handler.owner and frame.EnableMouseWheel and frame.HookScript then
 		frame:EnableMouseWheel(true)
 		frame:HookScript("OnMouseWheel", handler.callback)
@@ -677,8 +680,11 @@ function Module:LayoutTrackerScroll()
 	if not handler then
 		handler = {
 			owner = contents,
-			callback = function(_, delta)
-				self:OnTrackerWheel(delta)
+			module = self,
+			callback = function(frame, delta)
+				if frame.trackerWheelModule == self then
+					self:OnTrackerWheel(delta)
+				end
 			end,
 		}
 		self.trackerWheelHandler = handler

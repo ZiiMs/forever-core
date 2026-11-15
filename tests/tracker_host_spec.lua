@@ -321,6 +321,15 @@ scroll.drain()
 wheelChild.scripts.OnMouseWheel(wheelChild, -1)
 scroll.check(childWheelCalls == 1, "content wheel handlers remain installed")
 scroll.check(capped.scrollOffset == 60, "wheel input over content scrolls the owning section")
+rest.ContentsFrame.GetChildren = function()
+	return wheelChild
+end
+rest.count = 10
+capped.scrollOffset, rest.scrollOffset = 0, 0
+scroll.host:MarkDirty()
+scroll.drain()
+wheelChild.scripts.OnMouseWheel(wheelChild, -1)
+scroll.check(capped.scrollOffset == 0 and rest.scrollOffset == 60, "reused content wheels only its current section")
 
 -- A list that shrinks below its cap goes back to the top through the one setter, so the scroll child and the item
 -- buttons see the new view instead of keeping the old one.
