@@ -713,6 +713,22 @@ function Module:UpdateHeight()
 	end
 end
 
+-- The first block is the smallest useful expanded viewport: a shorter one shows its header and a clipped objective
+-- row, which makes the section unusable even though its scrollbar is visible. This derives the floor from Blizzard's
+-- measured header and pooled block metrics, rather than a display-size threshold.
+function Module:GetMinimumHeight()
+	if not self.trackerScrollable or type(self.IsCollapsed) == "function" and self:IsCollapsed() then
+		return 0
+	end
+	local block = self.firstBlock
+	if not block then
+		return 0
+	end
+	local header = self.headerHeight or 0
+	local offset = tonumber(self.fromHeaderOffsetY) or -10
+	return header + math.max(0, (block.height or block:GetHeight() or 0) - offset)
+end
+
 -- A scrollable section lays every block out, even the ones past the cap: they live in the scroll child, not in the
 -- room the column gave the section. The viewport, not CanFitBlock, decides what the player sees.
 function Module:CanFitBlock(block)
@@ -953,7 +969,20 @@ local function LayoutModules(width, available, reserve)
 			module.Header:SetWidth(width)
 		end
 		local ok = RunSafe(module.safeCall, "tracker section update", module.Update, module, cap)
+		local minimum = ok
+			and type(module.GetMinimumHeight) == "function"
+			and module:GetMinimumHeight()
+			or 0
+		if cap > 0 and minimum > cap then
+			-- Never make the column taller than the room it was given. If the first block itself is taller than the
+			-- available screen, the section keeps the bounded viewport and its own scrollbar instead.
+			module.trackerCap = math.min(minimum, available)
+			module:UpdateHeight()
+		end
 		local used = ok and module:GetContentsHeight() or 0
+		if cap <= 0 and module.trackerScrollable then
+			used = 0
+		end
 		heights[index] = used
 		if used > 0 then
 			total = total + used + GAP

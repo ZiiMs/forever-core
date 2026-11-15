@@ -255,6 +255,7 @@ scroll.drain()
 scroll.check(capped.available == 200, "a section other than Quests caps at 200 units")
 scroll.check(capped.trackerOverflow == true and capped.scrollRange == 325, "the capped section scrolls its overflow")
 scroll.check(capped:GetContentsHeight() == 200, "the capped section reports its visible height")
+scroll.check(capped:GetMinimumHeight() == 75, "the minimum height uses the measured header, offset and first block")
 scroll.check(capped.scrollBar:IsShown(), "an overflowing section shows the minimal scrollbar")
 scroll.check(
 	capped.scrollBar.kind == "EventFrame" and capped.scrollBar.template == "MinimalScrollBar",

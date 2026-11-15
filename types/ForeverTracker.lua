@@ -105,6 +105,7 @@
 ---@field Update? fun(self: ForeverTrackerModule, availableHeight: number, dirtyUpdate?: boolean)
 ---@field UpdateHeight? fun(self: ForeverTrackerModule)
 ---@field GetContentsHeight? fun(self: ForeverTrackerModule): number
+---@field GetMinimumHeight? fun(self: ForeverTrackerModule): number
 ---@field CanFitBlock? fun(self: ForeverTrackerModule, block: any): boolean
 ---@field BeginLayout? fun(self: ForeverTrackerModule)
 ---@field IsTruncated? fun(self: ForeverTrackerModule): boolean
