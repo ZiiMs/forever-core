@@ -3285,5 +3285,398 @@ class BrokerTest(unittest.TestCase):
         self.assertFalse((self.state / "stop").exists(), "a starting session has no resident loop to read the marker")
 
 
+class HyprlandLeaseTest(unittest.TestCase):
+    """`lease --hyprland`: serve owns both relaunches, holds the job lock throughout, and always comes back."""
+
+    def setUp(self):
+        self.state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(mock.patch.object(fc, "STATE_DIR", self.state))
+
+    def request(self, **extra) -> dict:
+        return {
+            "token": "lease-token",
+            "pid": os.getpid(),
+            "start_ticks": fc.process_start(os.getpid()),
+            "ttl": 900,
+            "label": "deskpilot#95",
+            "parent": "parent-signature",
+            **extra,
+        }
+
+    def test_the_lease_step_returns_on_release_expiry_and_crash_and_ends_on_down(self):
+        self.assertIsNone(fc.lease_step(10, 100, False, True, False))
+        self.assertEqual(fc.lease_step(10, 100, True, True, False), ("return", "released"))
+        self.assertEqual(fc.lease_step(100, 100, False, True, False), ("return", "the lease expired"))
+        self.assertEqual(fc.lease_step(10, 100, False, False, False)[0], "return")
+        # down ends the session without a relaunch, whatever else is due.
+        self.assertEqual(fc.lease_step(100, 100, True, False, True)[0], "end")
+
+    def test_the_default_hyprland_lease_is_fifteen_minutes(self):
+        self.assertEqual(fc.HYPRLAND_TTL, 15 * 60)
+        parsed = {}
+        with mock.patch.object(fc, "lease", side_effect=lambda a: parsed.setdefault("args", a) and 0):
+            fc.main(["lease", "--hyprland"])
+        self.assertTrue(parsed["args"].hyprland)
+        self.assertIsNone(parsed["args"].ttl, "the Hyprland default applies, not the plain lease's")
+
+    def test_the_hyprland_mode_is_opt_in(self):
+        with (
+            mock.patch.object(fc, "lease_hyprland") as hyprland,
+            mock.patch.object(fc, "acquire_job", return_value=(mock.Mock(), "lease-token")),
+            mock.patch.object(fc, "ensure_session", return_value=live_state(ready=1.0)),
+            mock.patch.object(fc, "start_holder", return_value=mock.Mock(pid=os.getpid())),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            fc.lease(argparse.Namespace(ttl=None, timeout=5, manual_launcher=False, label=None, hyprland=False))
+        hyprland.assert_not_called()
+
+    def test_a_request_from_a_lease_that_has_gone_is_dropped(self):
+        fc.write_atomic(self.state / fc.HYPRLAND_REQUEST, self.request(pid=dead_pid(), start_ticks=1))
+        self.assertIsNone(fc.hyprland_request())
+        self.assertFalse((self.state / fc.HYPRLAND_REQUEST).exists())
+        fc.write_atomic(self.state / fc.HYPRLAND_REQUEST, self.request())
+        self.assertEqual(fc.hyprland_request()["token"], "lease-token")
+
+    def test_an_absolute_point_gets_the_xwayland_offset_of_the_nested_output(self):
+        with mock.patch.object(fc.subprocess, "run") as run:
+            fc.x({"display": ":3", "origin": [1280, 0]}, "mousemove", "10", "20", "click", "1")
+            fc.x({"display": ":2"}, "mousemove", "10", "20")
+        self.assertEqual(run.call_args_list[0].args[0], ["xdotool", "mousemove", "1290", "20", "click", "1"])
+        self.assertEqual(run.call_args_list[1].args[0], ["xdotool", "mousemove", "10", "20"])
+
+    def run_lease(self, nested_module, *, release_at=None, launch=None, end_client=None, reach=None, client=None):
+        """Run hyprland_lease with every process faked; returns (result, order of the steps it took)."""
+        order = []
+        clock = FakeClock()
+        wall = {"now": 1000.0}
+        client = client or mock.Mock(pid=4321)
+        if client.poll.side_effect is None and not isinstance(client.poll.return_value, int):
+            client.poll.return_value = None
+        gamescope_new = mock.Mock(pid=777)
+
+        def sleep(seconds):
+            clock.sleep(seconds)
+            wall["now"] += seconds
+            if release_at is not None and wall["now"] >= release_at:
+                (self.state / fc.LEASE_END).write_text("lease-token")
+
+        def default_end(gamescope, _wine, state):
+            order.append(("end_client", state.get("mode")))
+            fc.stop_nested(state)
+
+        def default_launch(_launch, _env, _log, state):
+            order.append("launch_gamescope")
+            state.update(mode="gamescope", gamescope=777, display=":2")
+            return gamescope_new
+
+        def default_reach(state, _before, _timeout, _manual, _started, nudge=None):
+            order.append(("reach_world", state.get("mode")))
+            state["ready"] = wall["now"]
+
+        def popen(command, **kwargs):
+            order.append(("client", kwargs["env"]["DISPLAY"]))
+            return client
+
+        fc.write_job_record({"pid": os.getpid(), "token": "lease-token", "lease": True, "hyprland": True})
+        state = live_state(token="session", mode="gamescope", gamescope=555, display=":2", ready=1.0)
+        with (
+            mock.patch.object(fc, "nested_hyprland", return_value=nested_module),
+            mock.patch.object(fc, "end_client", side_effect=end_client or default_end),
+            mock.patch.object(fc, "launch_gamescope", side_effect=launch or default_launch),
+            mock.patch.object(fc, "reach_world", side_effect=reach or default_reach),
+            mock.patch.object(fc, "screenshots", return_value=set()),
+            mock.patch.object(fc.subprocess, "Popen", side_effect=popen),
+            mock.patch.object(fc.time, "monotonic", clock.monotonic),
+            mock.patch.object(fc.time, "sleep", side_effect=sleep),
+            mock.patch.object(fc.time, "time", side_effect=lambda: wall["now"]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = fc.hyprland_lease(
+                self.request(),
+                mock.Mock(pid=555),
+                {},
+                {"FOREVER_CLIENT_SESSION": "session"},
+                {"umu_run": "umu"},
+                None,
+                state,
+                600,
+            )
+        return result, order, state, gamescope_new
+
+    def nested(self, *, start_error=None):
+        module = mock.Mock()
+        module.NestedError = type("NestedError", (Exception,), {})
+        record = {
+            "signature": "nested-sig",
+            "wayland": "wayland-9",
+            "display": ":7",
+            "origin": [1280, 0],
+            "output": "FOREVER",
+            "pid": 1,
+            "birth": "1",
+            "run": "/nowhere",
+        }
+        if start_error:
+            module.start.side_effect = module.NestedError(start_error)
+        else:
+            module.start.return_value = record
+        module.running.return_value = True
+        module.window.return_value = {"address": "0xabc", "title": fc.GAME_WINDOW}
+        return module
+
+    def test_a_released_lease_relaunches_the_client_under_gamescope(self):
+        module = self.nested()
+        result, order, state, gamescope = self.run_lease(module, release_at=1010)
+        self.assertIs(result, gamescope)
+        self.assertEqual(
+            order,
+            [
+                ("end_client", "gamescope"),
+                ("client", ":7"),
+                ("reach_world", "hyprland"),
+                ("end_client", "hyprland"),
+                "launch_gamescope",
+                ("reach_world", "gamescope"),
+            ],
+        )
+        module.start.assert_called_once()
+        self.assertEqual(module.start.call_args.args[0], "parent-signature")
+        module.stop.assert_called_once()
+        self.assertIsNone(state["nested"])
+        self.assertFalse((self.state / fc.LEASE_END).exists())
+
+    def test_the_lease_records_its_window_and_expiry_while_it_runs(self):
+        module = self.nested()
+        seen = {}
+
+        def end_client(_gamescope, _wine, state):
+            if state.get("mode") == "hyprland":
+                seen.update(state=dict(state), job=fc.read_job_record())
+            fc.stop_nested(state)
+
+        self.run_lease(module, release_at=1005, end_client=end_client)
+        self.assertEqual(seen["state"]["window"]["address"], "0xabc")
+        self.assertEqual(seen["state"]["lease"], "lease-token")
+        self.assertEqual(seen["state"]["lease_expires"], 1000.0 + 900)
+        self.assertEqual(seen["job"]["expires"], 1000.0 + 900)
+
+    def test_a_forgotten_lease_expires_and_returns(self):
+        module = self.nested()
+        result, order, _state, gamescope = self.run_lease(module)
+        self.assertIs(result, gamescope)
+        self.assertIn("launch_gamescope", order)
+
+    def test_a_client_that_dies_in_hyprland_returns_to_gamescope(self):
+        module = self.nested()
+        client = mock.Mock(pid=4321)
+        client.poll.side_effect = [None, 1, 1]
+        client.wait.return_value = 1
+        result, order, _state, gamescope = self.run_lease(module, client=client)
+        self.assertIs(result, gamescope)
+        self.assertEqual(order[-2:], ["launch_gamescope", ("reach_world", "gamescope")])
+
+    def test_a_failed_hyprland_start_tells_the_lease_and_returns(self):
+        module = self.nested(start_error="the nested Hyprland did not come up")
+        result, order, _state, gamescope = self.run_lease(module)
+        self.assertIs(result, gamescope)
+        self.assertEqual(
+            order,
+            [("end_client", "gamescope"), ("end_client", "hyprland"), "launch_gamescope", ("reach_world", "gamescope")],
+        )
+        failed = json.loads((self.state / fc.LEASE_FAILED).read_text())
+        self.assertEqual(failed["token"], "lease-token")
+        self.assertIn("did not come up", failed["error"])
+
+    def test_down_during_a_lease_ends_without_a_relaunch(self):
+        module = self.nested()
+        (self.state / fc.STOP).touch()
+        result, order, _state, _gamescope = self.run_lease(module)
+        self.assertIsNone(result)
+        self.assertNotIn("launch_gamescope", order)
+
+    def test_a_failed_return_raises_so_serve_tears_down(self):
+        module = self.nested()
+
+        def launch(*_args):
+            raise fc.ClientError("gamescope started no client")
+
+        with self.assertRaisesRegex(fc.ClientError, "started no client"):
+            self.run_lease(module, release_at=1005, launch=launch)
+
+    def serve_with(self, hyprland_lease):
+        """Run serve with one Hyprland request waiting; returns the order of lock and lease steps."""
+        config = self.state / "env.json"
+        config.write_text(
+            '{"umu_run":"/faugus/umu-run","env":{"PROTONPATH":"/runner"},'
+            '"character":{"name":"Parked","guid":"1","require_resting":true}}'
+        )
+        client = self.state / "client"
+        (client / "Interface/AddOns").mkdir(parents=True)
+        fc.write_atomic(self.state / fc.HYPRLAND_REQUEST, self.request())
+        clock = FakeClock()
+        order = []
+
+        def acquire(timeout, label):
+            self.assertIsNone(timeout)
+            order.append(("acquire", label))
+            return mock.Mock(), "own-token"
+
+        def release(_handle, token, ended=True):
+            order.append(("release", token, fc.read_job_record()))
+
+        def lease(*args):
+            order.append(("lease", fc.read_job_record()["token"], fc.read_job_record()["hyprland"]))
+            (self.state / fc.HYPRLAND_REQUEST).unlink()
+            return hyprland_lease(*args)
+
+        gamescope = mock.Mock(pid=123)
+        gamescope.poll.return_value = None
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(fc, "CONFIG", config))
+            stack.enter_context(mock.patch.object(fc, "CLIENT", client))
+            stack.enter_context(mock.patch.object(fc, "nvidia_mismatch", return_value=None))
+            stack.enter_context(mock.patch.object(fc, "prefix_users", return_value=[]))
+            stack.enter_context(mock.patch.object(fc.socket, "create_connection"))
+            stack.enter_context(mock.patch.object(fc.signal, "signal"))
+            stack.enter_context(mock.patch.object(fc, "runtime_dir", return_value=self.state / "runtime"))
+            stack.enter_context(mock.patch.object(fc, "screenshots", return_value=set()))
+            stack.enter_context(
+                mock.patch.object(
+                    fc, "child_env", return_value={"DISPLAY": ":3", "GAMESCOPE_WAYLAND_DISPLAY": "private"}
+                )
+            )
+            stack.enter_context(mock.patch.object(fc, "wait_for_world", return_value=Path("ready.png")))
+            stack.enter_context(mock.patch.object(fc, "teardown", side_effect=lambda *a: order.append("teardown")))
+            stack.enter_context(mock.patch.object(fc, "acquire_job", side_effect=acquire))
+            stack.enter_context(mock.patch.object(fc, "release_job", side_effect=release))
+            stack.enter_context(mock.patch.object(fc, "hyprland_lease", side_effect=lease))
+            stack.enter_context(mock.patch.object(fc, "MAX_SESSION", 10))
+            stack.enter_context(mock.patch.object(fc, "IDLE_LIMIT", 10**9))
+            stack.enter_context(mock.patch.object(fc.time, "monotonic", clock.monotonic))
+            stack.enter_context(mock.patch.object(fc.time, "sleep", clock.sleep))
+            stack.enter_context(mock.patch.object(fc.time, "time", return_value=1000.0))
+            stack.enter_context(mock.patch.object(fc.subprocess, "Popen", return_value=gamescope))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            try:
+                result = fc.up(args())
+            except fc.ClientError as error:
+                result = error
+        return result, order
+
+    def test_serve_holds_the_job_lock_from_the_switch_until_the_client_is_back(self):
+        result, order = self.serve_with(lambda *_args: mock.Mock(pid=124, poll=mock.Mock(return_value=None)))
+        self.assertEqual(result, 0)
+        self.assertEqual(order[0], ("acquire", "deskpilot#95"))
+        self.assertEqual(order[1], ("lease", "lease-token", True))
+        # The lease's own lock goes only after the return; the lifetime cap then ends the session as usual.
+        self.assertEqual(order[2][:2], ("release", "lease-token"))
+        self.assertEqual(order[-3:-1], [("acquire", "the session's end (the 0 h lifetime cap)"), "teardown"])
+
+    def test_a_failed_return_ends_the_session_so_the_next_job_starts_fresh(self):
+        def failed(*_args):
+            raise fc.ClientError("the world did not load within 600 s")
+
+        result, order = self.serve_with(failed)
+        self.assertIsInstance(result, fc.ClientError)
+        self.assertEqual(order[-2:], ["teardown", ("release", "lease-token", order[-1][2])])
+        self.assertFalse(fc.session_lock_held(), "serve released the session lock, so a job can start a new one")
+
+    def test_release_of_a_hyprland_lease_waits_for_serve_to_hand_the_lock_back(self):
+        fc.write_job_record(
+            {
+                "pid": os.getpid(),
+                "start_ticks": fc.process_start(os.getpid()),
+                "token": "lease-token",
+                "label": "deskpilot#95",
+                "lease": True,
+                "hyprland": True,
+            }
+        )
+        clock = FakeClock()
+
+        def tick(seconds):
+            clock.sleep(seconds)
+            self.assertEqual((self.state / fc.LEASE_END).read_text(), "lease-token")
+            fc.job_record_path().unlink()
+
+        with (
+            mock.patch.object(fc.os, "kill") as kill,
+            mock.patch.object(fc.time, "monotonic", clock.monotonic),
+            mock.patch.object(fc.time, "sleep", side_effect=tick),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(fc.release("lease-token"), 0)
+        self.assertTrue(all(call.args[1] == 0 for call in kill.call_args_list), "serve, the holder, is never signalled")
+
+    def lease_args(self):
+        return argparse.Namespace(ttl=None, timeout=60, manual_launcher=False, label="deskpilot#95", hyprland=True)
+
+    def test_a_granted_lease_prints_the_nested_signature_and_window(self):
+        module = self.nested()
+        module.user_instance.return_value = "parent-signature"
+        written = {}
+
+        def session():
+            request = json.loads((self.state / fc.HYPRLAND_REQUEST).read_text())
+            written.update(request)
+            return live_state(
+                mode="hyprland",
+                lease=request["token"],
+                ready=1.0,
+                lease_expires=2000.0,
+                nested=module.start.return_value,
+                window={"address": "0xabc"},
+            )
+
+        out = io.StringIO()
+        with (
+            mock.patch.object(fc, "nested_hyprland", return_value=module),
+            mock.patch.object(fc, "current_session", side_effect=session),
+            mock.patch.object(fc.signal, "signal"),
+            contextlib.redirect_stdout(out),
+        ):
+            self.assertEqual(fc.lease(self.lease_args()), 0)
+        printed = json.loads(out.getvalue())
+        self.assertEqual(printed["token"], written["token"])
+        self.assertEqual(printed["HYPRLAND_INSTANCE_SIGNATURE"], "nested-sig")
+        self.assertEqual(printed["WAYLAND_DISPLAY"], "wayland-9")
+        self.assertEqual(printed["window"], "0xabc")
+        self.assertEqual(written["ttl"], fc.HYPRLAND_TTL)
+        self.assertEqual(written["parent"], "parent-signature")
+        self.assertFalse((self.state / fc.LEASE_END).exists())
+
+    def test_a_cancelled_lease_withdraws_its_request_and_tells_serve(self):
+        module = self.nested()
+        module.user_instance.return_value = "parent-signature"
+        with (
+            mock.patch.object(fc, "nested_hyprland", return_value=module),
+            mock.patch.object(fc, "current_session", return_value=live_state(mode="gamescope", ready=1.0)),
+            mock.patch.object(fc.time, "sleep", side_effect=KeyboardInterrupt),
+            mock.patch.object(fc.signal, "signal"),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            fc.lease(self.lease_args())
+        self.assertFalse((self.state / fc.HYPRLAND_REQUEST).exists())
+        self.assertTrue((self.state / fc.LEASE_END).read_text())
+
+    def test_a_failed_switch_is_reported_to_the_waiting_lease(self):
+        module = self.nested()
+        module.user_instance.return_value = "parent-signature"
+
+        def session():
+            token = json.loads((self.state / fc.HYPRLAND_REQUEST).read_text())["token"]
+            fc.write_atomic(self.state / fc.LEASE_FAILED, {"token": token, "error": "no XWayland DISPLAY"})
+            return live_state(mode="gamescope", ready=1.0)
+
+        with (
+            mock.patch.object(fc, "nested_hyprland", return_value=module),
+            mock.patch.object(fc, "current_session", side_effect=session),
+            mock.patch.object(fc.time, "sleep"),
+            mock.patch.object(fc.signal, "signal"),
+            self.assertRaisesRegex(fc.ClientError, "back to gamescope: no XWayland DISPLAY"),
+        ):
+            fc.lease(self.lease_args())
+
+
 if __name__ == "__main__":
     unittest.main()
