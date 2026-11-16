@@ -1,23 +1,34 @@
 {
-  "input_digest": "84471829132c7c2f54526fd8c50607aae799ccdb2d1e36f601d344f7a4409b9c",
-  "runtime_sha256": "84471829132c7c2f54526fd8c50607aae799ccdb2d1e36f601d344f7a4409b9c",
-  "candidate": "643609d59bbcdd645696c925c3c719c5308761768df42109fee3cd24d3d1fed5",
+  "input_digest": "c60f2af0573c2c735433df1d77fbaa88959e8677eafafac5495e9b5f05c6f429",
+  "runtime_sha256": "c60f2af0573c2c735433df1d77fbaa88959e8677eafafac5495e9b5f05c6f429",
+  "candidate": "9fb3317e281479117cb312305a8b317cced2233373c3712e9ec62d56a203cddd",
   "client_build": "1.60.1.70938 (Interface 16001)",
   "tested_artifact": "source-tree",
-  "source_commit": "4eb643e757ec2eff26c3c71594b4ccb34b38f0d0",
+  "source_commit": "8cdd9f31999177966d71f1fa65f10f9ee76721ee",
   "flows": [
     {
-      "name": "settings",
+      "name": "quest list on, game tracker hidden",
       "steps": [
-        "/fcore"
+        "flow_on2.lua sha256:a2b646a2f0ed6ac78d61a4296697290219dd854481a795beed0bfd98f2bfe70b"
+      ],
+      "result": "pass"
+    },
+    {
+      "name": "quest list off, game tracker back",
+      "steps": [
+        "flow_off.lua sha256:f60638dcf81ca288bf9c6e76631c7bbfae77ff3a5afb23df81474e245407dca5"
       ],
       "result": "pass"
     }
   ],
   "images": [
     {
-      "url": "https://gist.githubusercontent.com/cjber/9296e59e77849e089b2f1a74fb01a229/raw/51decfa76563e84f89c40941ef34454fb11c4ac9/1-settings.png",
-      "sha256": "5e49e4d2229da7e17c8711fbdc60fe5e1c80c9d8f451ede0d20222277c911470"
+      "url": "https://gist.githubusercontent.com/cjber/557061b4795db3f1ed21f7235285a669/raw/fe923b9cbe00a7ad134a39d2497c6cca76ad56bc/1-quest-list-on-game-tracker-hidden.png",
+      "sha256": "3323f09e9ecb5fcc302e7473d819c4f7b7e1b864acdeb2be483cd9e237d1ff48"
+    },
+    {
+      "url": "https://gist.githubusercontent.com/cjber/557061b4795db3f1ed21f7235285a669/raw/fe923b9cbe00a7ad134a39d2497c6cca76ad56bc/2-quest-list-off-game-tracker-back.png",
+      "sha256": "d0ca0ddb46270991cd71aa6e243a01699dea0ced7d881c04b03118dfbc85bbfe"
     }
   ]
 }
