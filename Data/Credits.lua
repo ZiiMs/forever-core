@@ -4,6 +4,8 @@ local _, ns = ...
 
 ns.Credits = {
 	players = {
+		{ name = "TechnoHunter", what = "Quest tracking stays safe when leveling" },
+		{ name = "user_efwsfml273dlvfm5", what = "Quest tracking stays safe when leveling" },
 		{ name = "Laddylucks", what = "Minimap button under SexyMap's control" },
 		{ name = "thirex", what = "Minimap button under SexyMap's control" },
 		{ name = "axejess", what = "Minimap button under SexyMap's control" },

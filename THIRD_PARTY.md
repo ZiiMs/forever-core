@@ -45,6 +45,8 @@ One row per shipped contribution: a player with five shipped items has five rows
 
 | Who | What | Notes |
 |---|---|---|
+| TechnoHunter | Quest tracking stays safe when leveling | CurseForge; thread 8734322; #608 |
+| user_efwsfml273dlvfm5 | Quest tracking stays safe when leveling | CurseForge; threads 8730123, 8716634, 8724252; #608 |
 | Laddylucks | Minimap button under SexyMap's control | CurseForge; thread 8729503; #685 |
 | thirex | Minimap button under SexyMap's control | CurseForge; thread 8729648; #685 |
 | axejess | Minimap button under SexyMap's control | CurseForge; thread 8729935; #685 |
