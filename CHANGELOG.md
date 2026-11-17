@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **The mouse wheel scrolls a tracker section over its text.** A quest taller than its space now scrolls a page at a time with overlap, so every objective stays reachable even in a short column. Stacked sections keep a readable row when space allows and show only their header otherwise. (#616, #615)
 - **Headless jobs wait in arrival order**, with live queue positions and dead-waiter cleanup. Ended leases fail with their reason and cannot carry over to a replacement session. (#734, #719, #730)
 - **Headless proofs check their candidate links at capture and teardown**, and link recovery runs only under the exclusive job lock. Recovery specs use isolated client folders. (#723, #724)
 - **Headless sessions restart when their helper addon changes**, and smoke, proof and dev builds fetch origin once for a missing full commit SHA. (#715, #692)
@@ -24,6 +25,8 @@
 - **The glyph check covers the quest tracker's fonts** and reads an addon's English phrases from its code when its English locale file lists none. (#543)
 - **A consumer whose `tools/typecheck.sh` does not run the client-call lint now fails the shared tooling check.** SkillUp vendored the lint without running it. (#539)
 - **Headless startup stops when Battle.net needs a game update.** It reports the launcher frame instead of clicking Play until the timeout, and stops after two Play clicks that start no game. (#316)
+- **The simulator keeps native load-on-demand template initialization secure** while preserving the caller and addon template ownership. (#640)
+- **Native quest header clicks have a simulator regression** using the real tracker and chat utility; the quest-list scenario no longer replaces ChatFrameUtil. (#630)
 
 ## [1.14.2] - 2026-11-16
 
