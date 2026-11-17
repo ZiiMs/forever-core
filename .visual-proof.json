@@ -1,11 +1,18 @@
 {
-  "input_digest": "e609d629f4de729b11e42ac688164f7abdd0f4fc53e552689892834ce4549352",
-  "runtime_sha256": "e609d629f4de729b11e42ac688164f7abdd0f4fc53e552689892834ce4549352",
-  "candidate": "47e50f36d3baf7879312d56ca1282bf9b2890ed0867723958530cbedc9375a9e",
+  "input_digest": "d11e13b39529a6b1dd211ef69f1cdc1508e78d5a2952e3428e5d44bebfd4dde8",
+  "runtime_sha256": "d11e13b39529a6b1dd211ef69f1cdc1508e78d5a2952e3428e5d44bebfd4dde8",
+  "candidate": "1b584fe048a9fde4fc97c3ebeaa1fdf8ae85df07a8bf03185282ab0cb5178eec",
   "client_build": "1.60.1.70938 (Interface 16001)",
   "tested_artifact": "source-tree",
-  "source_commit": "e737b997a15ba71662f2985f8dcf555b003e2045",
+  "source_commit": "4875ccfaa86641e9993ea30e28c4b2fb722233dd",
   "flows": [
+    {
+      "name": "questie defers",
+      "steps": [
+        "sha256:e1664e27ce9e254b7fa26a7082716615097734b76a70e50dad193e7cb7bf756c questie_defers.lua"
+      ],
+      "result": "pass"
+    },
     {
       "name": "questie tracker off",
       "steps": [
@@ -14,9 +21,23 @@
       "result": "pass"
     },
     {
-      "name": "items fit on screen",
+      "name": "tracker menu quest list switch",
       "steps": [
-        "sha256:de1dcdabb18e2ff8c5aacfaa6105cc74061540b626893ed34b9f9dbfc56bbe4b items_fit_watched.lua"
+        "sha256:2a28a167a11362f69ba98b9af82d412c8f293d3495bbc84c19a713c04649e45b tracker_menu_watched.lua"
+      ],
+      "result": "pass"
+    },
+    {
+      "name": "suite mute defers",
+      "steps": [
+        "sha256:c0fc1c4c61f43bc2e3059e717a75f0211ddb103b7f11e915903ff418ed7d2ebb defer.lua"
+      ],
+      "result": "pass"
+    },
+    {
+      "name": "restore list",
+      "steps": [
+        "sha256:1e6c29b4b8d5e6b0d688701e1d29f1113384e78a96abf6e4ff222e64716beb61 restore.lua"
       ],
       "result": "pass"
     },
@@ -30,16 +51,28 @@
   ],
   "images": [
     {
-      "url": "https://gist.githubusercontent.com/cjber/15eeba649840e00282587289859cedee/raw/263419c33620c45dc46db96e0dd78a23434ea6f4/1-questie-tracker-off.png",
-      "sha256": "b19033c4cc10a0c65f3cccfe4a4ad493045036b601987ae9cb26abd940c348c3"
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/1-questie-defers.png",
+      "sha256": "1e80744270a0567aca0fb5e20df2fe54651e4fce7b17503eae1af12ee21df388"
     },
     {
-      "url": "https://gist.githubusercontent.com/cjber/15eeba649840e00282587289859cedee/raw/263419c33620c45dc46db96e0dd78a23434ea6f4/2-items-fit-on-screen.png",
-      "sha256": "9ef28f24ac7907d408ed3607f5a1a90f52f9e75c9a394c29d84b173f21d7cb63"
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/2-questie-tracker-off.png",
+      "sha256": "237cfe0531e2e77cc5223ad5030b7a89116d3c2b1edb0fddb4cbb624e01bfb24"
     },
     {
-      "url": "https://gist.githubusercontent.com/cjber/15eeba649840e00282587289859cedee/raw/263419c33620c45dc46db96e0dd78a23434ea6f4/3-questie-tracker-on.png",
-      "sha256": "f8fd36b56d863ab6ac1fd6e975364a391e5888b4c58d2c7da02c126cd4d883e3"
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/3-tracker-menu-quest-list-switch.png",
+      "sha256": "9ca1a0c2c6c22f16b8963cad8675807ef77521c94e012208d0f1b46446535976"
+    },
+    {
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/4-suite-mute-defers.png",
+      "sha256": "02fd9acd09681eb48eeae6a27c3950d72c73c020d570472034371dc599c74975"
+    },
+    {
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/5-restore-list.png",
+      "sha256": "b8c55248cbc51364cf21a789ee6ce1ca02e695a7787e72c63edc89cc4e2351b3"
+    },
+    {
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/6-questie-tracker-on.png",
+      "sha256": "e2018f5996ed54f34644ea79689417023f1a1574b7b10bee79a42d8f3a57996b"
     }
   ]
 }
