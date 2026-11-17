@@ -1,23 +1,23 @@
 {
-  "input_digest": "765e28b3cc4c1e19096d35485f1ed9b4a48d20a8420ba5ba1ec2c08041b4a8fa",
-  "runtime_sha256": "765e28b3cc4c1e19096d35485f1ed9b4a48d20a8420ba5ba1ec2c08041b4a8fa",
-  "candidate": "ffda3fbb987d85ae4d273798658ad7c3df2e2b8651b45f42978e9a2c2e8fb1fa",
+  "input_digest": "16f040b19e8fb8f24c151883f3e40e97baa6e35c8c704f8d9afaa4ce23200329",
+  "runtime_sha256": "16f040b19e8fb8f24c151883f3e40e97baa6e35c8c704f8d9afaa4ce23200329",
+  "candidate": "9ac515bc51e62813237d8a1ba6b3a252785123ec686cb303a8ebbce92fca367c",
   "client_build": "1.60.1.70938 (Interface 16001)",
   "tested_artifact": "source-tree",
-  "source_commit": "dd9644c6b9cbb247e550d67b36db0a34d4c6bd2e",
+  "source_commit": "2a4d826e1ed46f67f3ac52a3d7ac6e93b22b962d",
   "flows": [
     {
-      "name": "minimap-tooltip",
+      "name": "goal diamond",
       "steps": [
-        "sha256:f6ab2a40064f0fc8506dfce0db1222adbfa3d66052b1aacf3c2ff19698355bb5 tooltip.lua"
+        "sha256:f10b7cb777e1fde4975186574abdd0ba743b9d378c8086b57222d21eeeb7e0df diamond-flow.lua"
       ],
       "result": "pass"
     }
   ],
   "images": [
     {
-      "url": "https://gist.githubusercontent.com/cjber/fdcd9f141e41190c46e6a840a3b428e8/raw/7b99bcb91ce1e1ed30cadbdeaafa66c55a69bd72/1-minimap-tooltip.png",
-      "sha256": "e1db87a78ed19377045a58a538e6400268d29626d64699d96451e563a7be5a4b"
+      "url": "https://gist.githubusercontent.com/cjber/256fbb5edec06b7d921cabc01049b16e/raw/a19e4ff2d9b2196863a37510deb1f43e6d37551a/1-goal-diamond.png",
+      "sha256": "bd25de98f497b1b24281c3467aec2804d7b9e5046a9f02c86e47c2922fb27ec0"
     }
   ]
 }
