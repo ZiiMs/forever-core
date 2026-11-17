@@ -263,21 +263,22 @@ def plan(repo: str) -> Decision:
     """
     head = main_head(repo)
     changelog = read_changelog(repo, head)
-    changes_pending = has_change_fragments(repo, head)
     entry = newest_entry(changelog) if changelog else None
     if entry is None or MARKER not in entry[1]:
-        return decide(changelog, None, False, False, "none", changes_pending=changes_pending)
+        return decide(changelog, None, False, False, "none")
+    if has_change_fragments(repo, head):
+        return decide(changelog, None, False, False, "none", changes_pending=True)
     version = entry[0]
     runs = release_runs(repo)
     if has_pending_release(runs):
-        return decide(changelog, None, False, True, "none", changes_pending=changes_pending)
+        return decide(changelog, None, False, True, "none")
     if has_failed_release(runs, head):
-        return decide(changelog, head, False, False, "none", release_failed=True, changes_pending=changes_pending)
+        return decide(changelog, head, False, False, "none", release_failed=True)
     if tag_exists(repo, f"v{version}"):
-        return decide(changelog, None, True, False, "none", changes_pending=changes_pending)
+        return decide(changelog, None, True, False, "none")
     state = ci_state(ci_runs(repo, head), head)
     smoke = smoke_status(repo, head) if state == "completed/success" else "missing"
-    return decide(changelog, head, False, False, state, smoke=smoke, changes_pending=changes_pending)
+    return decide(changelog, head, False, False, state, smoke=smoke)
 
 
 def dispatch(repo: str, version: str, commit: str) -> None:
