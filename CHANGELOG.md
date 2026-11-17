@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **Simulator profession searches filter recipe names and refresh visible rows**, with case-insensitive matching, clearing and list-update events. (#762)
 - **Settings pages can group controls beneath localized section headings.** Canvas pages share the native heading style and reserve room for wrapped labels without changing saved options. (#488)
 ## [1.14.3] - 2026-11-17
 
