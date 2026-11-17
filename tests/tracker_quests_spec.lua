@@ -16,6 +16,8 @@ local trackerShown, trackerProtected, showHook, hookCount = true, false, nil, 0
 local trackerAlpha = 0.75
 local trackerVisible, uiVisible = true, true
 local nativeShows = 0
+local driver
+local driverDispatch = false
 function tracker.SetAlpha(_, alpha)
 	trackerAlpha = alpha
 end
@@ -23,6 +25,7 @@ function tracker.GetAlpha()
 	return trackerAlpha
 end
 function tracker.Hide()
+	assert(driverDispatch or not driver, "native hide must come from secure driver")
 	trackerShown = false
 end
 function tracker.Show()
@@ -95,12 +98,26 @@ end
 function section:IsShown()
 	return self.shown
 end
+-- The one-time hint is tracker_quests_hint_spec's: this section is never on screen, so it never opens here.
+function section.HookScript() end
+function section.IsVisible()
+	return false
+end
 
 local ready
 local function continueAfterAllEvents(fn)
 	ready = fn
 end
 local combat = false
+local function DriverTick()
+	driverDispatch = true
+	if driver == "hide" then
+		tracker:Hide()
+	elseif driver == "show" then
+		tracker:Show()
+	end
+	driverDispatch = false
+end
 local addons = {}
 local ns = {
 	L = setmetatable({}, {
@@ -132,6 +149,17 @@ function visibility:SetScript(script, callback)
 end
 local tick
 local env = setmetatable({
+	RegisterStateDriver = function(frame, state, condition)
+		assert(not combat, "driver registration waits for combat")
+		assert(frame == tracker and state == "visibility")
+		driver = condition
+		DriverTick()
+	end,
+	UnregisterStateDriver = function(frame, state)
+		assert(not combat, "driver removal waits for combat")
+		assert(frame == tracker and state == "visibility")
+		driver = nil
+	end,
 	UIParent = {
 		IsVisible = function()
 			return uiVisible
@@ -237,7 +265,9 @@ check(section.marked > deferredMarked, "the ticker resumes the list when the oth
 check(not tracker:IsShown() and trackerAlpha == 0, "resuming the list keeps the native tracker suppressed")
 section.shown = true
 tracker:Show()
-check(not tracker:IsShown(), "native OnShow is suppressed")
+check(trackerAlpha == 0, "native OnShow stays invisible between driver ticks")
+DriverTick()
+check(not tracker:IsShown(), "secure driver suppresses native OnShow")
 check(hookCount == 1, "visibility hook is installed once")
 
 -- Blizzard_ObjectiveTrackerContainerMixin:Update calls Show whenever it has content. A combat quest update
@@ -246,9 +276,11 @@ trackerProtected = true
 combat = true
 tracker:Show()
 check(tracker:IsShown() and trackerAlpha == 0, "a protected native show in combat stays invisible")
+DriverTick()
+check(not tracker:IsShown(), "registered driver re-hides securely during combat")
 combat = false
 visibility.callback()
-check(not tracker:IsShown(), "combat ending applies the deferred hide")
+check(not tracker:IsShown(), "combat ending preserves the secure hide")
 trackerProtected = false
 
 -- Turning the list off and back on restores and hides the native frame; its modules stay where the client left them.
@@ -258,6 +290,7 @@ check(section.marked > marked, "turning the list off redraws the Forever section
 CheckNativeModulesUntouched("turning the list off")
 check(tracker:IsShown(), "disabling restores the native tracker")
 check(trackerAlpha == 0.75, "disabling restores the original native alpha")
+check(driver == nil, "disabling releases the visibility driver")
 TrackerQuests.SetEnabled(true)
 CheckNativeModulesUntouched("turning the list on again")
 
@@ -280,6 +313,7 @@ TrackerQuests.SetEnabled(false)
 combat = false
 visibility.callback()
 check(tracker:IsShown(), "latest disabled request cancels the protected hide")
+check(driver == nil, "cancelled combat hide leaves no show driver")
 TrackerQuests.SetEnabled(true)
 check(not tracker:IsShown(), "protected tracker hides after combat")
 CheckNativeModulesUntouched("a change asked for in combat")
