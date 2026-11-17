@@ -371,7 +371,7 @@ logic out of a general rule.
 | Skill | Load it when |
 |---|---|
 | `.agents/skills/wow-forever-addon/SKILL.md` | the shared standards pack (`WFA-*`), UI look, icon, docs, CI and release baseline |
-| `.agents/skills/wow-addon-publish/SKILL.md` | publishing to CurseForge and Wago, or cutting a release |
+| `.agents/skills/wow-addon-publish/SKILL.md` | publishing to CurseForge and GitHub, or cutting a release |
 | `.agents/skills/wow-retail-ui-style/SKILL.md` | drawing or auditing addon windows, frames and widgets |
 
 Each addon declares `wow-forever-addon` under `## Standards` in its `AGENTS.md`, pinned to this repo. The pack's
@@ -384,14 +384,13 @@ Every version needs changelog fragments consumed into a `CHANGELOG.md` entry bef
 `python3 tools/changelog.py release X.Y.Z` in the release preparation commit. No PR edits `CHANGELOG.md` otherwise:
 CI's `--check --base` fails it. `.github/workflows/release.yml` waits for full CI on the commit, checks it with
 `tools/release_check.py`, prints the version's notes with `tools/changelog.py <version>`, and runs the packager with
-`CF_API_KEY`, `WAGO_API_TOKEN` and `GITHUB_OAUTH`, so GitHub, CurseForge and Wago all get the same words. A release
+`CF_API_KEY` and `GITHUB_OAUTH`, so GitHub and CurseForge get the same words. A release
 preparation that edits the update notice or a locale records the visual proof its runtime change needs through an
 `INGAME ... kind: proof` request to the in-game agent with `flows: update notice=<slash command or Lua file>`, and
 commits the `.visual-proof.json` it writes, so the required `visual-proof` check passes without an admin merge. A sync
 PR that moves the ForeverCore pin sends the request its own run prints. See `wow-forever-addon/in-game.md`.
-CurseForge is the published description and gallery; Wago is an upload mirror with a fixed stub pointing at
-CurseForge. A core version bump reaches consumers through the stores, since they require it; nothing is copied into
-them. Raise `ForeverCore.API` only when the public table or `Register` breaks.
+CurseForge is the published description and gallery. A core version bump reaches consumers through the stores, since
+they require it; nothing is copied into them. Raise `ForeverCore.API` only when the public table or `Register` breaks.
 
 ## Load order
 
