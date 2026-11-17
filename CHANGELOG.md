@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - **The attached tracker column starts below an enlarged minimap when they overlap**, with its sections sized to the space left on screen. (#720)
+- **The Forever quest list tells you how to switch it off** the first time it replaces the game's tracker, and its Quests menu says so plainly. (#765)
 
 ## [1.14.3] - 2026-11-17
 
