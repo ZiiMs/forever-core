@@ -45,6 +45,8 @@ One row per shipped contribution: a player with five shipped items has five rows
 
 | Who | What | Notes |
 |---|---|---|
+| [moshoutegong](https://github.com/moshoutegong) | Simplified Chinese translation | GitHub; cjber/adventure-guide-forever#801 |
+| [moshoutegong](https://github.com/moshoutegong) | Traditional Chinese translation | GitHub; cjber/adventure-guide-forever#802 |
 | Laddylucks | Minimap button under SexyMap's control | CurseForge; thread 8729503; #685 |
 | thirex | Minimap button under SexyMap's control | CurseForge; thread 8729648; #685 |
 | axejess | Minimap button under SexyMap's control | CurseForge; thread 8729935; #685 |

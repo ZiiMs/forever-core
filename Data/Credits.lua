@@ -4,6 +4,8 @@ local _, ns = ...
 
 ns.Credits = {
 	players = {
+		{ name = "moshoutegong", what = "Simplified Chinese translation" },
+		{ name = "moshoutegong", what = "Traditional Chinese translation" },
 		{ name = "Laddylucks", what = "Minimap button under SexyMap's control" },
 		{ name = "thirex", what = "Minimap button under SexyMap's control" },
 		{ name = "axejess", what = "Minimap button under SexyMap's control" },
