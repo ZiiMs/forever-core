@@ -9,7 +9,7 @@ sys.path.insert(0, str(TOOLING))
 from forever_tools import lua51, widget_handlers  # noqa: E402
 
 PACKAGE = Path(".release") / "ForeverCore"
-DEV = ("tests", "tools", "docs", "types")
+DEV = ("tests", "tools", "docs", "types", "changes")
 
 
 def toc_files():

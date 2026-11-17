@@ -12,6 +12,7 @@ ignore:
   - tools
   - types
   - tests
+  - changes
   - media/icon.svg
   - media/icon-400.png
   - stylua.toml
