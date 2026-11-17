@@ -355,6 +355,12 @@ def main(root: Path, argv: list[str] | None = None) -> None:
         if args.check:
             version = args.check.removeprefix("v")
             versions = [version]
+            if paths:
+                names = ", ".join(path.name for path in paths)
+                raise SystemExit(
+                    f"{version} cannot be released while changes/ holds {names}: run"
+                    f" `python3 tools/changelog.py release {version}` so its section carries them, and commit that"
+                )
             check(text, versions)
             check_image(root, text, version, [v for v in tags if _version_key(v) < _version_key(version)])
         else:

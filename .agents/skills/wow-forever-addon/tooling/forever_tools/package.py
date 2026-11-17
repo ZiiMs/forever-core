@@ -41,7 +41,7 @@ from .lua import LuaSyntaxError, tokenize
 __all__ = ["Policy", "check", "has_section", "licence_file", "main", "run_specs"]
 
 # Besides these, every top-level name starting with a dot (`.agents`, `.luacheckrc`, `.luarc.json`) is development.
-FORBIDDEN = ("AGENTS.md", "changes", "docs", "ruff.toml", "stylua.toml", "tests", "tools", "types")
+FORBIDDEN = ("AGENTS.md", "docs", "ruff.toml", "stylua.toml", "tests", "tools", "types")
 # What the client accepts for a texture, font or sound path given without its extension.
 EXTENSIONS = ("", ".tga", ".blp", ".png", ".jpg", ".ttf", ".otf", ".ogg", ".mp3")
 # A string.format spec in a file name (media\Numbers\%d): the path names every file it can fill in.

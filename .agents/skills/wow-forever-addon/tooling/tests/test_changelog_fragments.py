@@ -201,6 +201,18 @@ class FragmentsTest(unittest.TestCase):
             self.assertIn(reason, str(error.exception))
             self.assertIn("allowed sections: " + ", ".join(changelog.SECTIONS), str(error.exception))
 
+    def test_a_release_commit_that_still_holds_fragments_fails_its_version_check(self):
+        root = self.repo()
+        self.note(root, "751", "### Fixed\n\n- Fix.\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            changelog.main(root, ["release", "1.0.1", "--date", "2026-11-17"])
+            changelog.main(root, ["--check", "1.0.1"])
+        self.note(root, "752", "### Added\n\n- Late.\n")
+        with self.assertRaises(SystemExit) as error:
+            changelog.main(root, ["--check", "v1.0.1"])
+        self.assertIn("1.0.1 cannot be released while changes/ holds 752.md", str(error.exception))
+        self.assertIn("python3 tools/changelog.py release 1.0.1", str(error.exception))
+
     def test_release_prints_only_written_section_and_check_prints_status(self):
         root = self.repo()
         self.note(root, "751", "### Fixed\n\n- Fix.\n")

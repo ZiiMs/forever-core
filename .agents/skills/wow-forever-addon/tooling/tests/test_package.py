@@ -67,19 +67,11 @@ class PackageTest(unittest.TestCase):
 
     def test_root_dev_config_files_are_refused(self):
         files = self.good()
-        for name in (
-            "ruff.toml",
-            "stylua.toml",
-            ".luacheckrc",
-            ".luarc.json",
-            ".editorconfig",
-            "docs/x.md",
-            "changes/751.md",
-        ):
+        for name in ("ruff.toml", "stylua.toml", ".luacheckrc", ".luarc.json", ".editorconfig", "docs/x.md"):
             files[f"Addon/{name}"] = ""
         files["Lib/.styluaignore"] = ""
         problems = "\n".join(package.check(self.make(files), POLICY))
-        for name in ("ruff.toml", "stylua.toml", ".luacheckrc", ".luarc.json", ".editorconfig", "docs", "changes"):
+        for name in ("ruff.toml", "stylua.toml", ".luacheckrc", ".luarc.json", ".editorconfig", "docs"):
             self.assertIn(f"Addon/{name}: shipped", problems)
         self.assertIn("Lib/.styluaignore: shipped", problems)
 
