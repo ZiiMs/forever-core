@@ -189,3 +189,5 @@ L["Login error: %s"] = "登入錯誤：%s" -- mt
 L["Copy %s: %s"] = "副本 %s：%s" -- mt
 
 L.MINIMAP_DRAG_HINT = "拖曳可沿小地圖移動按鈕。" -- mt
+
+L["Turn in to %s"] = "向%s交任務" -- mt

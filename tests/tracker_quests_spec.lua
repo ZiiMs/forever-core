@@ -443,4 +443,90 @@ end
 check(section:UpdateQuest(records[1]), "a private folded quest renders without native cache access")
 check(block.id == 101 and block.complete, "the rendered POI receives direct completion data")
 
+-- Questie data is independent of its tracker frames and cannot replace a native distance.
+local reads = 0
+local objectiveDone = false
+local mapID = 12
+env.C_Map = {
+	GetBestMapForUnit = function()
+		return mapID
+	end,
+	GetWorldPosFromMapPos = function(_, point)
+		return 1, {
+			GetXY = function()
+				return point.x * 100, point.y * 100
+			end,
+		}
+	end,
+}
+env.CreateVector2D = function(x, y)
+	return { x = x, y = y }
+end
+env.UnitPosition = function()
+	return 0, 0, 0, 1
+end
+env.C_QuestLog.GetQuestObjectives = function()
+	return { { finished = objectiveDone }, { finished = false } }
+end
+local db = {
+	GetQuest = function()
+		reads = reads + 1
+		return {
+			Finisher = { NPC = { 1 }, GameObject = { 2 } },
+			ObjectiveData = {
+				{ Type = "monster", Id = 3 },
+				{ Type = "object", Id = 4 },
+			},
+		}
+	end,
+	QueryNPCSingle = function(id, field)
+		if field == "name" then
+			return "Keeper"
+		end
+		return { [100] = { { id == 1 and 3 or 6, id == 1 and 4 or 8 } }, [200] = { { 0, 0 } } }
+	end,
+	QueryObjectSingle = function(id, field)
+		if field == "name" then
+			return "Stone"
+		end
+		return { [100] = { { id == 2 and 30 or 9, id == 2 and 40 or 12 } } }
+	end,
+}
+env.QuestieLoader = {
+	ImportModule = function(_, name)
+		if name == "QuestieDB" then
+			return db
+		end
+		return {
+			GetUiMapIdByAreaId = function(_, area)
+				return area == 100 and 12 or 13
+			end,
+		}
+	end,
+}
+section:OnEvent("QUEST_LOG_UPDATE")
+local detailed = section:Records()
+check(detailed[1].finisher == "Keeper, Stone", "ready quest reads NPC and object finisher names")
+check(detailed[1].distanceSq == 400, "native distance wins over Questie")
+env.C_QuestLog.GetDistanceSqToQuest = function() end
+detailed = section:Records()
+check(detailed[1].distanceSq == 25, "nearest same-zone finisher is five yards away")
+check(detailed[2].distanceSq == 100, "first unfinished objective supplies distance")
+local previousReads = reads
+section:Records()
+check(reads == previousReads, "movement refresh reuses cached spawn projections")
+objectiveDone = true
+section:OnEvent("QUEST_LOG_UPDATE")
+check(section:Records()[2].distanceSq == 225, "quest update advances to next unfinished objective")
+mapID = 14
+check(section:Records()[1].distanceSq == nil, "other zones never supply distance")
+env.QuestieLoader.ImportModule = function()
+	error("changed Questie")
+end
+section:OnEvent("QUEST_LOG_UPDATE")
+check(section:Records()[1].finisher == nil, "changed Questie fails closed")
+env.QuestieLoader = nil
+section:OnEvent("QUEST_LOG_UPDATE")
+check(section:Records()[1].distanceSq == nil, "missing Questie leaves missing native distance alone")
+
 print("tracker_quests_spec: " .. checks .. " checks passed")

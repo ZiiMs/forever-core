@@ -194,3 +194,5 @@ L["Login error: %s"] = "로그인 오류: %s" -- mt
 L["Copy %s: %s"] = "사본 %s: %s" -- mt
 
 L.MINIMAP_DRAG_HINT = "드래그하여 미니맵 주위로 버튼을 이동하세요." -- mt
+
+L["Turn in to %s"] = "%s에게 완료" -- mt

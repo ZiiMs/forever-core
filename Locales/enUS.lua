@@ -194,3 +194,5 @@ L["Login error: %s"] = "Login error: %s"
 L["Copy %s: %s"] = "Copy %s: %s"
 
 L.MINIMAP_DRAG_HINT = "Drag to move it around the minimap."
+
+L["Turn in to %s"] = "Turn in to %s"

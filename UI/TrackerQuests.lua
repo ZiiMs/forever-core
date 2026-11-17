@@ -1165,6 +1165,111 @@ local function QuestLogCount()
 	return total
 end
 
+-- Questie's data modules only. Every call, including projection of external coordinates, is isolated so an
+-- unavailable module or a changed data shape leaves the native quest record intact.
+local questieTargets = {}
+local function QuestieModule(name)
+	local loader = rawget(_G, "QuestieLoader")
+	if type(loader) == "table" and type(loader.ImportModule) == "function" then
+		return loader:ImportModule(name)
+	end
+end
+
+local function BuildQuestieTargets(questID, readyForTurnIn, mapID)
+	local result = { points = {} }
+	local db = QuestieModule("QuestieDB")
+	if type(db) ~= "table" then
+		return result
+	end
+	local quest = db.GetQuest(questID)
+	if type(quest) ~= "table" then
+		return result
+	end
+	local zone = QuestieModule("ZoneDB")
+	local function Add(kind, id, finisher)
+		local query = kind == "NPC" and db.QueryNPCSingle or db.QueryObjectSingle
+		if type(query) ~= "function" then
+			return
+		end
+		if finisher then
+			local name = query(id, "name")
+			if type(name) == "string" and name ~= "" then
+				result.names = result.names or {}
+				result.names[#result.names + 1] = name
+			end
+		end
+		local spawns = query(id, "spawns")
+		if type(spawns) ~= "table" or type(zone) ~= "table" then
+			return
+		end
+		for area, points in pairs(spawns) do
+			if mapID and zone:GetUiMapIdByAreaId(area) == mapID then
+				for _, point in ipairs(points) do
+					local x, y = point[1], point[2]
+					if type(x) == "number" and type(y) == "number" and x >= 0 and x <= 100 and y >= 0 and y <= 100 then
+						local continent, world = C_Map.GetWorldPosFromMapPos(mapID, CreateVector2D(x / 100, y / 100))
+						if world then
+							local wx, wy = world:GetXY()
+							result.points[#result.points + 1] = { continent, wx, wy }
+						end
+					end
+				end
+			end
+		end
+	end
+	if readyForTurnIn then
+		for _, kind in ipairs({ "NPC", "GameObject" }) do
+			for _, id in ipairs(quest.Finisher and quest.Finisher[kind] or {}) do
+				Add(kind, id, true)
+			end
+		end
+	else
+		-- Questie uses this same ObjectiveData index to join its corrected database to the client quest log.
+		for index, objective in ipairs(C_QuestLog.GetQuestObjectives(questID) or {}) do
+			if not objective.finished then
+				local data = quest.ObjectiveData and quest.ObjectiveData[index]
+				if data then
+					if data.Type == "monster" or data.Type == "object" then
+						Add(data.Type == "monster" and "NPC" or "GameObject", data.Id)
+					elseif data.Type == "item" then
+						for _, source in ipairs({ { "npcDrops", "NPC" }, { "objectDrops", "GameObject" } }) do
+							for _, id in ipairs(db.QueryItemSingle(data.Id, source[1]) or {}) do
+								Add(source[2], id)
+							end
+						end
+					end
+				end
+				break
+			end
+		end
+	end
+	return result
+end
+
+local function QuestieDetails(questID, readyForTurnIn)
+	local mapID = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+	local cached = questieTargets[questID]
+	if not cached or cached.mapID ~= mapID or cached.ready ~= readyForTurnIn then
+		local ok, targets = pcall(BuildQuestieTargets, questID, readyForTurnIn, mapID)
+		cached = ok and targets or { points = {} }
+		cached.mapID, cached.ready = mapID, readyForTurnIn
+		questieTargets[questID] = cached
+	end
+	local nearest
+	if UnitPosition then
+		local x, y, _, continent = UnitPosition("player")
+		if x and y and continent then
+			for _, point in ipairs(cached.points) do
+				if continent == point[1] then
+					local distance = (x - point[2]) ^ 2 + (y - point[3]) ^ 2
+					nearest = nearest and math.min(nearest, distance) or distance
+				end
+			end
+		end
+	end
+	return cached.names and table.concat(cached.names, L[", "]), nearest
+end
+
 ---@return ForeverQuestRecord[]
 function Overrides:Records()
 	local zones, onMap = LogZones()
@@ -1181,11 +1286,17 @@ function Overrides:Records()
 			local quest = QuestData(questID)
 			if self:ShouldDisplayQuest(quest) then
 				local distanceSq = C_QuestLog.GetDistanceSqToQuest(questID)
+				local isReady = C_QuestLog.ReadyForTurnIn(questID) == true or C_QuestLog.IsComplete(questID)
+				local finisher, fallback = QuestieDetails(questID, isReady)
+				if type(distanceSq) ~= "number" then
+					distanceSq = fallback
+				end
 				records[#records + 1] = {
 					questID = questID,
 					title = C_QuestLog.GetTitleForQuestID(questID) or (quest and quest.title) or "",
 					zone = zones[questID] or "",
-					ready = C_QuestLog.ReadyForTurnIn(questID) == true or C_QuestLog.IsComplete(questID),
+					ready = isReady,
+					finisher = finisher,
 					onMap = onMap[questID] == true,
 					distanceSq = type(distanceSq) == "number" and distanceSq or nil,
 				}
@@ -1403,6 +1514,9 @@ function Overrides:UpdateQuest(record)
 		self:DoQuestObjectives(block, isComplete, isSequenced, isExistingBlock, useFullHeight)
 	end
 
+	if record.ready and record.finisher then
+		block:AddObjective("Finisher", L["Turn in to %s"]:format(record.finisher), nil, useFullHeight)
+	end
 	if block.hasItem then
 		block.height = math.max(block.height or 0, ITEM_SIZE)
 	end
@@ -1492,6 +1606,14 @@ end
 
 ---@param event string
 function Overrides:OnEvent(event, cvar)
+	if
+		event == "QUEST_LOG_UPDATE"
+		or event == "ZONE_CHANGED_NEW_AREA"
+		or event == "ADDON_LOADED"
+		or event == "PLAYER_ENTERING_WORLD"
+	then
+		questieTargets = {}
+	end
 	if event == "CVAR_UPDATE" and cvar ~= "questPOI" then
 		return
 	end

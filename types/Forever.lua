@@ -48,6 +48,7 @@
 ---@field zone string?
 ---@field ready boolean?
 ---@field onMap boolean?
+---@field finisher string?
 ---@field distanceSq number?
 
 ---@class ForeverQuestGroup

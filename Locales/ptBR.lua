@@ -194,3 +194,5 @@ L["Login error: %s"] = "Erro de login: %s" -- mt
 L["Copy %s: %s"] = "Cópia %s: %s" -- mt
 
 L.MINIMAP_DRAG_HINT = "Arraste para mover o botão ao redor do minimapa." -- mt
+
+L["Turn in to %s"] = "Entregue a %s" -- mt

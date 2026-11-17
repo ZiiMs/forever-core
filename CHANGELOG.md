@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Ready quests name who to turn them in to, and quests without a map marker show a distance**, both from Questie's data when it is loaded. (#177)
+
 - **Fixed an error when leveling with the Forever quest list on.** Thanks to TechnoHunter and user_efwsfml273dlvfm5 for the reports. (#608)
 
 ## [1.14.3] - 2026-11-17

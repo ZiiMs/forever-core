@@ -254,6 +254,67 @@ scenario("the Forever quest list groups, sorts and collapses the game's quests",
 
 	local section = sim.G.ForeverCoreQuestTracker
 	assert(section ~= nil, "the Forever quest section exists")
+	-- A data-only Questie installation provides finishers and exact same-map spawn coordinates.
+	local questieMap = 12
+	sim.G.QuestieLoader = {
+		ImportModule = function(_, name)
+			if name == "ZoneDB" then
+				return {
+					GetUiMapIdByAreaId = function()
+						return questieMap
+					end,
+				}
+			end
+			return {
+				GetQuest = function()
+					return { Finisher = { NPC = { 1 } }, ObjectiveData = { { Type = "monster", Id = 2 } } }
+				end,
+				QueryNPCSingle = function(_, field)
+					if field == "name" then
+						return "Keeper"
+					end
+					return { [100] = { { 3, 4 } } }
+				end,
+			}
+		end,
+	}
+	local bestMap = sim.impl["C_Map.GetBestMapForUnit"]
+	local project = sim.impl["C_Map.GetWorldPosFromMapPos"]
+	local position = sim.impl["UnitPosition"]
+	sim.impl["C_Map.GetBestMapForUnit"] = function()
+		return 12
+	end
+	sim.impl["C_Map.GetWorldPosFromMapPos"] = function(_, point)
+		return 1, sim.G.CreateVector2D(point.x * 100, point.y * 100)
+	end
+	sim.impl["UnitPosition"] = function()
+		return 0, 0, 0, 1
+	end
+	distances[101], distances[102] = nil, nil
+	section:OnEvent("QUEST_LOG_UPDATE")
+	local details = section:Records()
+	assert(details[1].finisher == "Keeper", "Questie data supplies the turn-in name")
+	assert(
+		details[1].distanceSq == 25 and details[2].distanceSq == 25,
+		"Questie supplies finisher and objective distances"
+	)
+	sim:advance(0.2)
+	local readyBlock = section.usedBlocks["ObjectiveTrackerQuestPOIBlockTemplate"][101]
+	assert(
+		readyBlock:GetExistingLine("Finisher").Text:GetText() == "Turn in to Keeper",
+		"ready row renders the finisher"
+	)
+	questieMap = 13
+	section:OnEvent("QUEST_LOG_UPDATE")
+	assert(section:Records()[1].distanceSq == nil, "another zone cannot supply distance")
+	sim.G.QuestieLoader = nil
+	sim.impl["C_Map.GetBestMapForUnit"] = bestMap
+	sim.impl["C_Map.GetWorldPosFromMapPos"] = project
+	sim.impl["UnitPosition"] = position
+	distances[101], distances[102] = 400, 900
+	section:OnEvent("QUEST_LOG_UPDATE")
+	sim:advance(0.2)
+
 	assert(section.trackerOverflow == false and section.scrollRange == 0, "a short list does not scroll")
 	assert(section.scrollBar:IsShown() == false, "a short list shows no scrollbar")
 

@@ -192,3 +192,5 @@ L["Login error: %s"] = "Anmeldefehler: %s" -- mt
 L["Copy %s: %s"] = "Kopie %s: %s" -- mt
 
 L.MINIMAP_DRAG_HINT = "Ziehen, um die Schaltfläche um die Minikarte zu bewegen." -- mt
+
+L["Turn in to %s"] = "Bei %s abgeben" -- mt

@@ -204,3 +204,5 @@ L["Login error: %s"] = "Ошибка входа: %s" -- mt
 L["Copy %s: %s"] = "Копия %s: %s" -- mt
 
 L.MINIMAP_DRAG_HINT = "Перетащите кнопку вдоль края мини-карты." -- mt
+
+L["Turn in to %s"] = "Сдать: %s" -- mt
