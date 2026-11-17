@@ -75,7 +75,7 @@ local function clears(a, b)
 end
 -- `fill`: the section takes all the room it is given, as a long guide does; otherwise it is one 227-high block, shown
 -- whole when it fits and skipped when it does not, as Blizzard's modules lay out blocks.
-local function scenario(anchor, scale, uiScale, userScale, fill)
+local function scenario(anchor, scale, uiScale, userScale, fill, enlargedMinimap)
 	local frames, timers, ready, combat = {}, {}, nil, false
 	local screen
 	local function frame(_, name, parent)
@@ -151,6 +151,9 @@ local function scenario(anchor, scale, uiScale, userScale, fill)
 		end
 		function f:Show()
 			self.shown = true
+		end
+		function f:GetAlpha()
+			return self.alpha or 1
 		end
 		function f:IsShown()
 			return self.shown ~= false
@@ -237,6 +240,19 @@ local function scenario(anchor, scale, uiScale, userScale, fill)
 	setfenv(assert(loadfile("UI/TrackerOrder.lua")), env)("Test", ns) -- the section order, loaded before the host
 	setfenv(assert(loadfile(os.getenv("TRACKER_HOST_SOURCE") or "UI/TrackerHost.lua")), env)("Test", ns)
 	local host = frames[4]
+	local minimap
+	if enlargedMinimap then
+		-- A full-height native viewport at the right edge sends the column beside it. The quest replacement makes it
+		-- transparent, but the enlarged minimap extends left into that side placement (#720).
+		native.points, native.point = nil, nil
+		rawPoint(native, anchor, screen, "TOPRIGHT", anchor == "TOPLEFT" and -274 or -24, 0)
+		rawHeight(native, 1080)
+		native.alpha, nineSlice.height = 0, 1080
+		minimap = frame(nil, "minimap", screen)
+		minimap.width, minimap.height, minimap.scale = 200, 200, 1.24
+		minimap:SetPoint("TOPRIGHT", screen, "TOPRIGHT", -40, -50)
+		env.Minimap = minimap
+	end
 	local module = frame()
 	module.uiOrder = -1
 	local used, updates = 0, 0
@@ -263,6 +279,28 @@ local function scenario(anchor, scale, uiScale, userScale, fill)
 	local slot = { native:GetPoint() }
 	ready()
 	drain()
+	if minimap then
+		local function clearMap()
+			check(host:IsShown(), "the attached column remains visible beside the enlarged minimap")
+			check(clears(host, minimap), "the attached column clears an enlarged minimap")
+			check(
+				host:GetTop() * host:GetEffectiveScale() <= minimap:GetBottom() * minimap:GetEffectiveScale() + 0.01,
+				"the column starts below the minimap instead of repeating the overlapping side placement"
+			)
+			check(
+				host:GetBottom() >= 24 * screen:GetEffectiveScale() / host:GetEffectiveScale() - 0.01,
+				"sections fit the room below the map without screen clamping them back over it"
+			)
+		end
+		clearMap()
+		for _, height in ipairs({ 1080, 40, 40, 1080 }) do
+			nineSlice.height = height
+			host:MarkDirty()
+			drain()
+			clearMap()
+		end
+		return
+	end
 	local function below()
 		local _, _, _, _, contentBottom = bounds(nineSlice)
 		local left, top, width, height = bounds(host)
@@ -360,4 +398,8 @@ for _, scale in ipairs({ 0.75, 1, 1.25 }) do
 		end
 	end
 end
+scenario("TOPRIGHT", 1, 1, 1, false, true)
+scenario("TOPRIGHT", 1, 0.8, 1, false, true)
+scenario("TOPLEFT", 1, 1, 1, false, true)
+scenario("TOPRIGHT", 1, 1, 1, true, true)
 print("tracker_geometry_spec: " .. checks .. " checks passed")

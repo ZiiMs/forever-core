@@ -835,18 +835,6 @@ local function OverlapsMinimap()
 	return left < mr and right > ml and bottom < mt and top > mb
 end
 
-local function AvoidMinimap(point)
-	if not OverlapsMinimap() then
-		return
-	end
-	host:ClearAllPoints()
-	if point:find("LEFT", 1, true) then
-		host:SetPoint("TOPLEFT", ObjectiveTrackerFrame, "TOPRIGHT", 0, 0)
-	else
-		host:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPLEFT", 0, 0)
-	end
-end
-
 local function SidePoint(point)
 	local left, right = ObjectiveTrackerFrame:GetLeft(), ObjectiveTrackerFrame:GetRight()
 	local screen = UIParent:GetWidth()
@@ -1181,7 +1169,6 @@ local function LayoutAttached()
 		else
 			host:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPLEFT", 0, 0)
 		end
-		AvoidMinimap(point)
 	end
 	-- A layout pass is not a measurement: Blizzard's EndLayout hides a section that fits nothing and its
 	-- FreeUnusedBlocks releases every block, so laying the sections out below just to probe the room replays each
@@ -1193,28 +1180,37 @@ local function LayoutAttached()
 			host:Hide()
 			return
 		end
-		if (host:GetHeight() or 0) <= roomBelow then
-			Below()
-			aside = false
+		aside = (host:GetHeight() or 0) > roomBelow
+	elseif LayoutModules(host:GetWidth(), roomBelow, 0) then
+		-- The sections shrink to the room below the quests: a tall section shows what fits there and never sends the
+		-- column elsewhere.
+		aside = false
+	else
+		-- No section fits below at all (quests ending at the bottom of the screen). The one pass that shows them above
+		-- or beside the tracker is a real move, so it pays the replay once; later layouts stay there without one.
+		if not LayoutModules(host:GetWidth(), screenRoom, 0) then
+			host:Hide()
 			return
 		end
+		aside = true
+	end
+	if aside then
 		Aside()
-		return
 	end
-	-- The sections shrink to the room below the quests: a tall section shows what fits there and never sends the
-	-- column elsewhere.
-	if LayoutModules(host:GetWidth(), roomBelow, 0) then
-		aside = false
-		return
+	-- Every successful attached placement has its final height now. An enlarged minimap can cover the native slot
+	-- even when the sections fit below its content, so check the whole column regardless of the chosen placement.
+	if OverlapsMinimap() then
+		local minimap = _G.Minimap
+		local left = host:GetLeft() or 0
+		local top = (minimap:GetBottom() or 0) * minimap:GetEffectiveScale() / layoutScale
+		host:ClearAllPoints()
+		host:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
+		-- Moving below the map also changes the room the sections own. Reflow with that cap so a long section scrolls
+		-- instead of being screen-clamped back up across the map.
+		if not LayoutModules(host:GetWidth(), math.max(0, top - layoutMargin), 0) then
+			host:Hide()
+		end
 	end
-	-- No section fits below at all (quests ending at the bottom of the screen). The one pass that shows them above or
-	-- beside the tracker is a real move, so it pays the replay once; the next layout stays there without one.
-	if not LayoutModules(host:GetWidth(), screenRoom, 0) then
-		host:Hide()
-		return
-	end
-	aside = true
-	Aside()
 end
 
 -- Attached while another addon's list covers the native slot: the column goes below, above or beside it and the
