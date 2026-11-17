@@ -96,11 +96,28 @@ if not host then
 	return
 end
 
--- Another tracker owns the quest list: Questie's, EQOT's, or Kaliel's Tracker. Their names are the compatibility
+-- Another tracker owns the quest list: Questie's, EQOT's, EllesmereUI's, or Kaliel's Tracker. Their names form the
 -- matrix, so detecting them by name is deliberate. The list modules read the host frame, the same one the host itself
 -- passes, not the published API table.
+local hidNativeTracker = false
+local coreMutedNative = false
+
 ---@return boolean
 local function OtherOwner()
+	if ns.TrackerEllesmere and ns.TrackerEllesmere.Owns() then
+		return true
+	end
+	-- Before our own suppression, a muted tracker or a shown tracker under a hidden parent means another addon
+	-- replaced the visible list. A plain hidden tracker can just be Blizzard's empty list; UIParent can hide globally.
+	if
+		not coreMutedNative
+		and (
+			ObjectiveTrackerFrame:GetAlpha() == 0
+			or (ObjectiveTrackerFrame:IsShown() and not ObjectiveTrackerFrame:IsVisible() and UIParent:IsVisible())
+		)
+	then
+		return true
+	end
 	local companion = rawget(_G, "ForeverTrackerCompanion")
 	if companion then
 		local eqot = ns.TrackerEqot
@@ -123,16 +140,18 @@ local section
 -- run them: an addon Hide taints that layout and the scenario tracker's subsequent secret aura reads (#608).
 -- Alpha covers native Show calls between driver ticks. Driver registration waits for combat to end.
 local hideNativeTracker = false
-local hidNativeTracker = false
 local nativeTrackerAlpha = 1
 local nativeDriverRegistered = false
 local visibilityFrame = CreateFrame("Frame")
 local function ApplyNativeVisibility()
 	if hideNativeTracker then
-		if not hidNativeTracker then
+		if not coreMutedNative then
 			nativeTrackerAlpha = ObjectiveTrackerFrame:GetAlpha()
-			hidNativeTracker = true
+			coreMutedNative = true
 		end
+		hidNativeTracker = true
+		-- Blizzard's container layout can Show again on a combat quest update. Hide may be protected then, but
+		-- alpha is not: suppress that Show immediately rather than exposing the tracker until combat ends.
 		ObjectiveTrackerFrame:SetAlpha(0)
 	end
 	if InCombatLockdown() then
@@ -145,12 +164,15 @@ local function ApplyNativeVisibility()
 			nativeDriverRegistered = true
 			RegisterStateDriver(ObjectiveTrackerFrame, "visibility", "hide")
 		end
-	elseif hidNativeTracker then
+	elseif hidNativeTracker or coreMutedNative then
+		-- Another tracker may have taken over while ours was on. Release our ownership without showing its tracker.
+		local otherOwner = OtherOwner()
 		hidNativeTracker = false
-		if not OtherOwner() then
+		if not otherOwner then
+			ObjectiveTrackerFrame:SetAlpha(nativeTrackerAlpha)
+			coreMutedNative = false
 			nativeDriverRegistered = true
 			RegisterStateDriver(ObjectiveTrackerFrame, "visibility", "show")
-			ObjectiveTrackerFrame:SetAlpha(nativeTrackerAlpha)
 		end
 		if nativeDriverRegistered then
 			UnregisterStateDriver(ObjectiveTrackerFrame, "visibility")
@@ -710,8 +732,15 @@ local function AddThinBar(module, block, line, objectiveIndex, fraction)
 	bar:SetHeight(THIN_BAR_HEIGHT)
 	block:AddCustomRegion(bar, 0, -THIN_BAR_GAP)
 	bar:ClearAllPoints()
-	bar:SetPoint("TOPLEFT", line.Text, "BOTTOMLEFT", 0, -THIN_BAR_GAP)
-	bar:SetPoint("TOPRIGHT", line.Text, "BOTTOMRIGHT", 0, -THIN_BAR_GAP)
+	-- The region is also the next objective's anchor, so keep its left edge on the line, not its indented text.
+	bar:SetPoint("TOPLEFT", line, "BOTTOMLEFT", 0, -THIN_BAR_GAP)
+	bar:SetPoint("TOPRIGHT", line, "BOTTOMRIGHT", 0, -THIN_BAR_GAP)
+	bar.background:ClearAllPoints()
+	bar.background:SetPoint("TOPLEFT", line.Text, "BOTTOMLEFT", 0, -THIN_BAR_GAP)
+	bar.background:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", 0, 0)
+	bar.fill:ClearAllPoints()
+	bar.fill:SetPoint("TOPLEFT", bar.background, "TOPLEFT", 0, 0)
+	bar.fill:SetPoint("BOTTOMLEFT", bar.background, "BOTTOMLEFT", 0, 0)
 	bar.fraction = fraction
 	block.thinBars = block.thinBars or {}
 	block.thinBars[objectiveIndex] = bar
@@ -722,7 +751,7 @@ end
 ---@param module ForeverQuestTrackerModule
 local function FitThinBars(module)
 	for _, bar in ipairs(type(module.activeThinBars) == "table" and module.activeThinBars or {}) do
-		local width = bar:GetWidth() or 0
+		local width = bar.background:GetWidth() or 0
 		bar.fill:SetWidth(math.max(0, width * (bar.fraction or 0)))
 	end
 end
@@ -905,6 +934,7 @@ local function CreateItemButton(parent, index)
 	button.HotKey = hotKey
 
 	local icon = button:CreateTexture(nil, "BORDER")
+	icon:SetAllPoints(button)
 	button.icon = icon
 
 	local count = button:CreateFontString(nil, "BORDER", "NumberFontNormal")
@@ -1509,7 +1539,10 @@ EventUtil.ContinueAfterAllEvents(function()
 			if InCombatLockdown() or not TrackerQuests.Enabled() then
 				return
 			end
-			if host.IsAttached(section) ~= true or section:IsShown() then
+			if
+				OtherOwner() ~= ownedByOther
+				or (not ownedByOther and (host.IsAttached(section) ~= true or section:IsShown()))
+			then
 				apply()
 			end
 		end)

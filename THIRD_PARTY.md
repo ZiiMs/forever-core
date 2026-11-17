@@ -47,6 +47,13 @@ One row per shipped contribution: a player with five shipped items has five rows
 |---|---|---|
 | TechnoHunter | Quest tracking stays safe when leveling | CurseForge; thread 8734322; #608 |
 | user_efwsfml273dlvfm5 | Quest tracking stays safe when leveling | CurseForge; threads 8730123, 8716634, 8724252; #608 |
+| serb1tar | Quest item icons and progress bars fit the quest list | CurseForge; #743 |
+| tommyekholm | Quest item icons and progress bars fit the quest list | CurseForge; #743 |
+| Crypa7 | Quest item icons and progress bars fit the quest list | CurseForge; #743 |
+| [Shuro](https://github.com/Shuro) | Quest objective bars stay aligned inside the column | #735 |
+| dokiz | Quest list steps aside for a UI suite's tracker | CurseForge; thread 8733295 under 8732171; #736 |
+| user_vyffn82yvmu3bflh | Quest list steps aside for EllesmereUI | CurseForge; thread 8733334; #736 |
+| user_8vheexbirr5v6h4a | Quest list switch in every section's Tracker menu | CurseForge; thread 8734900; cjber/shortest-path-forever#949 |
 | Laddylucks | Minimap button under SexyMap's control | CurseForge; thread 8729503; #685 |
 | thirex | Minimap button under SexyMap's control | CurseForge; thread 8729648; #685 |
 | axejess | Minimap button under SexyMap's control | CurseForge; thread 8729935; #685 |

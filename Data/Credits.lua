@@ -6,6 +6,13 @@ ns.Credits = {
 	players = {
 		{ name = "TechnoHunter", what = "Quest tracking stays safe when leveling" },
 		{ name = "user_efwsfml273dlvfm5", what = "Quest tracking stays safe when leveling" },
+		{ name = "serb1tar", what = "Quest item icons and progress bars fit the quest list" },
+		{ name = "tommyekholm", what = "Quest item icons and progress bars fit the quest list" },
+		{ name = "Crypa7", what = "Quest item icons and progress bars fit the quest list" },
+		{ name = "Shuro", what = "Quest objective bars stay aligned inside the column" },
+		{ name = "dokiz", what = "Quest list steps aside for a UI suite's tracker" },
+		{ name = "user_vyffn82yvmu3bflh", what = "Quest list steps aside for EllesmereUI" },
+		{ name = "user_8vheexbirr5v6h4a", what = "Quest list switch in every section's Tracker menu" },
 		{ name = "Laddylucks", what = "Minimap button under SexyMap's control" },
 		{ name = "thirex", what = "Minimap button under SexyMap's control" },
 		{ name = "axejess", what = "Minimap button under SexyMap's control" },

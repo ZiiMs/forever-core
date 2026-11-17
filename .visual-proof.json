@@ -1,23 +1,78 @@
 {
-  "input_digest": "765e28b3cc4c1e19096d35485f1ed9b4a48d20a8420ba5ba1ec2c08041b4a8fa",
-  "runtime_sha256": "765e28b3cc4c1e19096d35485f1ed9b4a48d20a8420ba5ba1ec2c08041b4a8fa",
-  "candidate": "ffda3fbb987d85ae4d273798658ad7c3df2e2b8651b45f42978e9a2c2e8fb1fa",
+  "input_digest": "d11e13b39529a6b1dd211ef69f1cdc1508e78d5a2952e3428e5d44bebfd4dde8",
+  "runtime_sha256": "d11e13b39529a6b1dd211ef69f1cdc1508e78d5a2952e3428e5d44bebfd4dde8",
+  "candidate": "1b584fe048a9fde4fc97c3ebeaa1fdf8ae85df07a8bf03185282ab0cb5178eec",
   "client_build": "1.60.1.70938 (Interface 16001)",
   "tested_artifact": "source-tree",
-  "source_commit": "dd9644c6b9cbb247e550d67b36db0a34d4c6bd2e",
+  "source_commit": "4875ccfaa86641e9993ea30e28c4b2fb722233dd",
   "flows": [
     {
-      "name": "minimap-tooltip",
+      "name": "questie defers",
       "steps": [
-        "sha256:f6ab2a40064f0fc8506dfce0db1222adbfa3d66052b1aacf3c2ff19698355bb5 tooltip.lua"
+        "sha256:e1664e27ce9e254b7fa26a7082716615097734b76a70e50dad193e7cb7bf756c questie_defers.lua"
+      ],
+      "result": "pass"
+    },
+    {
+      "name": "questie tracker off",
+      "steps": [
+        "sha256:0aaab1e6f667414beb8c5c63208c2a80bb97f7f536c2d19b3bbae1bea3e792bc questie_tracker_off.lua"
+      ],
+      "result": "pass"
+    },
+    {
+      "name": "tracker menu quest list switch",
+      "steps": [
+        "sha256:2a28a167a11362f69ba98b9af82d412c8f293d3495bbc84c19a713c04649e45b tracker_menu_watched.lua"
+      ],
+      "result": "pass"
+    },
+    {
+      "name": "suite mute defers",
+      "steps": [
+        "sha256:c0fc1c4c61f43bc2e3059e717a75f0211ddb103b7f11e915903ff418ed7d2ebb defer.lua"
+      ],
+      "result": "pass"
+    },
+    {
+      "name": "restore list",
+      "steps": [
+        "sha256:1e6c29b4b8d5e6b0d688701e1d29f1113384e78a96abf6e4ff222e64716beb61 restore.lua"
+      ],
+      "result": "pass"
+    },
+    {
+      "name": "questie tracker on",
+      "steps": [
+        "sha256:e2f89b6a99ebbf292620d6d05110588ed9963c7fcd635c4a9556ba0f77bf969b questie_tracker_on.lua"
       ],
       "result": "pass"
     }
   ],
   "images": [
     {
-      "url": "https://gist.githubusercontent.com/cjber/fdcd9f141e41190c46e6a840a3b428e8/raw/7b99bcb91ce1e1ed30cadbdeaafa66c55a69bd72/1-minimap-tooltip.png",
-      "sha256": "e1db87a78ed19377045a58a538e6400268d29626d64699d96451e563a7be5a4b"
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/1-questie-defers.png",
+      "sha256": "1e80744270a0567aca0fb5e20df2fe54651e4fce7b17503eae1af12ee21df388"
+    },
+    {
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/2-questie-tracker-off.png",
+      "sha256": "237cfe0531e2e77cc5223ad5030b7a89116d3c2b1edb0fddb4cbb624e01bfb24"
+    },
+    {
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/3-tracker-menu-quest-list-switch.png",
+      "sha256": "9ca1a0c2c6c22f16b8963cad8675807ef77521c94e012208d0f1b46446535976"
+    },
+    {
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/4-suite-mute-defers.png",
+      "sha256": "02fd9acd09681eb48eeae6a27c3950d72c73c020d570472034371dc599c74975"
+    },
+    {
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/5-restore-list.png",
+      "sha256": "b8c55248cbc51364cf21a789ee6ce1ca02e695a7787e72c63edc89cc4e2351b3"
+    },
+    {
+      "url": "https://gist.githubusercontent.com/cjber/2bd68c6ca9238a79fcca10365cca7410/raw/72048bdca566ba0fdaf5bb20206777c36af16973/6-questie-tracker-on.png",
+      "sha256": "e2018f5996ed54f34644ea79689417023f1a1574b7b10bee79a42d8f3a57996b"
     }
   ]
 }
