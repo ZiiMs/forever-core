@@ -4,16 +4,16 @@ needs it, so if you remove all of mine you can remove ForeverCore too. There is 
 
 My addons use it for:
 
-- **One tracker column.** Each of my addons adds its section to the same objective tracker. Scale it, lock it or
-  drag it once, and every addon follows. The quest list is on by default only if you use Adventure Guide; everyone
-  else keeps the game's own tracker, and it never touches Questie or any other tracker addon. `/fcore quests` turns
-  it on or off.
+- **One tracker column.** Each of my addons adds its section to the same column, a frame of its own that sits to
+  the left of the game's quest tracker, top edges level, and follows it when you move that tracker in Edit Mode. Drag
+  any section's header to put it anywhere; Lock in the header's right-click menu keeps it there. Scale it once, and
+  every addon follows. It never changes the game's quest tracker.
 - **A bug report window.** Each addon's report command opens a ready-to-copy report with the version, the client
   build, the character, the place, recent errors, a performance table and a log.
 - **Debug capture.** `/forever debug on` turns on the client's own chat, combat and taint logs for a report and
   `/forever debug off` puts the client's settings back, so a player can attach what the report needs without a
   developer's addon.
-- **The common chrome.** The minimap button, the quest log side tabs, the settings page drawing, the error journal and
+- **The common chrome.** The quest log side tabs, the settings page drawing, the error journal and
   the debug log are shared once.
 
 Free, with nothing locked behind it. If it saves you time, you can [sponsor me on GitHub](https://github.com/sponsors/cjber), which takes no fees, or [buy me a coffee on Ko-fi](https://ko-fi.com/cjber). For help and each day's release notes, [join me on Discord](https://discord.gg/FpHugGxRJY).

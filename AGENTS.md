@@ -2,11 +2,11 @@
 
 ForeverCore is the shared library under the WoW: Forever addon suite (Interface 16001). It is its own addon,
 `ForeverCore`, and every Forever addon declares it with `## OptionalDeps: ForeverCore`, so the client loads it first
-when it is installed and the addon still loads when it is not. It owns the one objective-tracker
-column the suite docks into, the grip and Lock switch that move it, the section order that stacks them, the Questie and
-EQOT bridges that keep the column out from under another tracker's quest list, the report and issue windows, the error
-journal and debug log, the minimap button, the world map quest log tabs, the settings-page chrome and the Forever
-addons page. It is GPL-3.0-or-later.
+when it is installed and the addon still loads when it is not. It owns the one tracker
+column the suite docks into, pinned beside the game's quest tracker until the player drags a section header, the Lock
+switch that stops the drag,
+the section order that stacks them, the report and issue windows, the error journal and debug log,
+the world map quest log tabs and the settings-page chrome. It is GPL-3.0-or-later.
 
 ## The two rules that matter
 
@@ -26,6 +26,7 @@ luacheck .
 stylua --check .
 python3 .agents/skills/wow-forever-addon/tooling/forever_tools/specs.py   # every spec, in parallel
 python3 tools/fetch_tracker_ui.py && TRACKER_UI_ROOT=tools/.cache/tracker-ui luajit tests/tracker_host_spec.lua
+TRACKER_UI_ROOT=tools/.cache/tracker-ui luajit tests/tracker_reflow_spec.lua
 bash tools/typecheck.sh                   # LuaLS and the WoW API annotations at tools/toolchain.json's pins
 python3 tools/check_consumers.py          # every consumer's tooling, ForeverCore pin and packaging match this repo
 python3 tools/check_client_load.py        # every font object exists in the client; no TOC lists Bindings.xml (WFA-37)
@@ -61,9 +62,13 @@ uv run --project tools --frozen --group dev ruff format --check tools
 uv run --project tools --frozen --group dev python -m unittest discover -s tools -p "test_*.py"
 ```
 
-`tests/tracker_host_spec.lua` is the native integration spec: it runs Blizzard's real objective-tracker source,
-fetched at a pinned revision by `tools/fetch_tracker_ui.py`, against this host. The other tracker specs stub everything
-and run anywhere. `tests/api_spec.lua` loads the TOC in order, registers two fake addons and checks the public API.
+`tests/tracker_host_spec.lua` is the native integration spec: it runs Blizzard's real objective-tracker source, fetched
+at a pinned revision by `tools/fetch_tracker_ui.py`, against this host. `tests/tracker_reflow_spec.lua` runs the same
+source to check that a client event or another frame moving never moves the column, that an Edit Mode move of the game
+tracker carries it through the anchor alone, and that only a dirty section rebuilds. `tests/sim/jitter795_scenario.lua`
+is the #795 loop under forever_sim (`luajit .agents/skills/wow-forever-addon/tooling/forever_sim/run.lua -v
+--only=jitter795`): 0 column moves while the section heights swing. The other tracker specs stub everything and run anywhere. `tests/api_spec.lua` loads the TOC in order,
+registers two fake addons and checks the public API.
 
 ## Layout
 
@@ -91,37 +96,37 @@ and run anywhere. `tests/api_spec.lua` loads the TOC in order, registers two fak
 - `UI/Report.lua`: the per-addon report window and issue composer, bound to the addon's icon, version and `X-Website`.
   Its text carries the performance table from `Core/Performance.lua` and, while debug capture is on, the line that
   names the client's `Logs` folder and how to stop the capture.
-- `UI/ForeverFamily.lua`: the Forever addons settings page and link windows, in core's L.
-- `UI/Credits.lua`: the **Thanks** page the Forever addons page opens: every addon's `ns.Credits` merged by player
+- `UI/Credits.lua`: the **Thanks** page: every addon's `ns.Credits` merged by player
   name into one compact row per player, with every addon's line on hover and a short **Inspired by** group, a
   dropdown that filters the page to one registered addon, and the one-line thanks an addon's own settings page shows.
 - `Data/Credits.lua`: core's own generated credits, from `THIRD_PARTY.md`'s `## Players` and `## Inspired by` tables;
   `Expose.lua` registers it under **ForeverCore**. `THIRD_PARTY.md` also feeds the one-sentence thanks between the
   `forever-credits` markers in README.md's `## Credits` and in `docs/curseforge.md`.
-- `UI/TrackerHost.lua`: the private tracker column, its optional tooltip-art backdrop and opacity, its layout, combat
-  and Edit Mode handling, and the one-time migration from a consumer's old tracker settings.
+- `UI/TrackerHost.lua`: the private tracker column, one frame on `UIParent` the player drags and locks, its optional
+  tooltip-art backdrop and opacity, its layout and combat handling, the one-time move of an old attached or beside
+  placement to the pin, and the one-time migration from a consumer's old tracker settings. By default its `TOPRIGHT`
+  is anchored to `ObjectiveTrackerFrame`'s `TOPLEFT`, one `SetPoint` the engine keeps through Edit Mode moves and
+  while that tracker is hidden; a header drag saves a free position and releases the pin.
+  The anchor is the only use of the native tracker: nothing in core reads its contents, visibility or geometry, or
+  writes to it (no alpha, state driver, hook, Show, Hide or SetPoint), and placement never reads the column's own
+  height. `tests/tracker_host_harness.lua`'s native tracker fails any read or write, and `tests/tracker_host_spec.lua`
+  scans the TOC's files for one. There is no Forever quest list: quests show in the game's tracker or a quest
+  addon's.
 - `UI/ContextMenu.lua`: the suite's one context menu, drawn in its own frame because Blizzard's menu can assert on
   this client build; its own frames do not taint the gamepad interface's focus as Blizzard's menu does.
-- `UI/TrackerLock.lua`: the grip and the Lock switch, which load before the host.
+- `UI/TrackerLock.lua`: the header drag and the Lock switch that stops it, which load before the host.
 - `UI/TrackerOrder.lua`: the section order (`uiOrder`, then attach order).
-- `UI/TrackerQuestie.lua`, `UI/TrackerEqot.lua` and `UI/TrackerEllesmere.lua`: another tracker's quest list, so the
-  column steps beside it.
-- `UI/TrackerQuests.lua` and `Core/QuestOrder.lua`: core's own default quest list and its pure ordering.
 - `UI/QuestLogTabs.lua`: the shared world map quest log side tab, stacking every addon's panel tab by order,
   restoring the client's own pages on demand and telling a panel through `shown` when it becomes visible or stops
   being visible, so panels set no OnShow or OnHide script under the map.
 - `UI/ProfessionTabs.lua`: the shared side tab for addon pages in the Professions window, stacking every addon's tab
   under the client's own in registration order, handing the window back on a client tab or page, and keeping the
   window at one width for every profession and tab.
-- `Core/RetiredLeaderboards.lua`: the no-op `ForeverCore.Leaderboards` and `ForeverCore.PeerStats.New` answers an older
-  addon release still calls unguarded while it loads. They keep a login from raising a Lua error, store nothing, register
-  no addon-message prefix and send nothing. Remove the file once no supported release calls those members.
 - `Core/APIKit.lua`: the shape every addon's own public API follows, published as `ForeverCore.APIKit`: `Hub` for a
   next-frame change dispatch, `NotReady` and `Invalid` for the two `nil, reason` answers, and `Publish` and `Addons`
   for the suite's published API list. `docs/api-conventions.md` is the convention, `docs/api.md` is ForeverCore's own
   page for third-party authors, and `tools/check_api_docs.py` checks an addon's `Core/API.lua` against its
   `docs/api.md`.
-- `Core/MinimapButton.lua`: the one minimap ring; each addon draws one button.
 - `Core/Text.lua`: the shared search fold and ranking.
 - `UI/SettingsPage.lua`: the settings canvas; `Register(name, build, L)` reads every label and tooltip through the
   calling addon's L, and carries the debug-capture notice while `/forever debug on` is active.

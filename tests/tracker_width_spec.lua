@@ -9,12 +9,11 @@ end
 for _, scale in ipairs({ 0.5, 1, 1.5 }) do
 	local t = harness.new()
 	local module = t.scrollModule(3, 10, 40)
-	t.native:SetWidth(340)
 	t.host:MarkDirty()
 	t.drain()
 	t.drain()
 	if os.getenv("TRACKER_WIDTH_CASE") ~= "overflow" then
-		check(module.Header:GetWidth() == module:GetWidth(), "viewport header follows section width after resize")
+		check(module.Header:GetWidth() == module:GetWidth(), "viewport header follows section width")
 	end
 	local contents = module.ContentsFrame
 	contents.effectiveScale = scale
@@ -87,16 +86,16 @@ for _, scale in ipairs({ 0.5, 1, 1.5 }) do
 	t.host:MarkDirty()
 	t.drain()
 	t.drain()
-	check(contents.point[4] == 13, "native POI left edge survives clipping at scale " .. scale)
+	check(module.scrollFrame.points.TOPLEFT[4] == -13, "native POI left edge survives clipping at scale " .. scale)
 	check(module.scrollFrame.point[4] + 18 == 16, "right extension survives clipping")
 	check(contents:GetWidth() == module:GetWidth() - 18, "clip expansion does not change text wrapping")
-	check(contents.point[4] == 13, "scroll child counter-offset preserves content alignment")
+	check(contents.point[2] == module.Header and contents.point[4] == 0, "the contents keep the header's left edge")
 	check(module.scrollFrame.point[4] == -18 + 16, "viewport expands its right edge")
-	local held = contents.point[4]
+	local held = module.scrollFrame.points.TOPLEFT[4]
 	t.setCombat(true)
 	contents.left = 200
 	module:LayoutTrackerScroll()
-	check(contents.point[4] == held, "combat does not change clipping geometry")
+	check(module.scrollFrame.points.TOPLEFT[4] == held, "combat does not change clipping geometry")
 	t.setCombat(false)
 	function contents.GetChildren() end
 	t.host:MarkDirty()

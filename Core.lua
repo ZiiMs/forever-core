@@ -22,27 +22,25 @@ do
 end
 
 -- ForeverCore is the shared floor under the Forever addons: one objective-tracker column the suite docks into, the
--- grip and Lock switch that move it, and the section order that stacks them. Every Forever addon requires this addon
--- (docs/adoption.md), so exactly one copy of each shared file loads in the game. This file is ForeverCore's own
+-- header drag and Lock switch that move it, and the section order that stacks them. Every Forever addon requires this
+-- addon (docs/adoption.md), so exactly one copy of each shared file loads in the game. This file is ForeverCore's own
 -- install of the tracker contract: the settings the host reads, the one ns.Store() seam, and the explicit ns.Start()
 -- a converted copy gets from the loader (with the transitional ADDON_LOADED handler for the unwrapped standalone).
 
 -- One defaults constructor, used both for a throwaway table before the store exists and for the table kept in the
 -- runtime store (ForeverCoreDB in the transitional standalone). The tracker scale, the Lock switch, the background
--- opacity and the detach position live in the host's own settings rather than an addon's defaults table, because the
+-- opacity and the column's position live in the host's own settings rather than an addon's defaults table, because the
 -- host outlives whichever addon happened to load first.
 ---@return ForeverTrackerSettings
 local function DefaultTrackerSettings()
-	return { attached = true, locked = false, scale = 1, backdropOpacity = 0 }
+	-- `attached = false` marks a fresh table as already past the host's one-time move off the quest tracker.
+	return { attached = false, locked = false, scale = 1, backdropOpacity = 0 }
 end
 
 -- Repair one settings table, so a hand-edited or older value cannot break the host's layout.
 ---@param settings ForeverTrackerSettings
 ---@return ForeverTrackerSettings
 local function NormalizeTrackerSettings(settings)
-	if type(settings.attached) ~= "boolean" then
-		settings.attached = true
-	end
 	if type(settings.scale) ~= "number" or settings.scale ~= settings.scale then
 		settings.scale = 1
 	end
@@ -914,11 +912,12 @@ end
 -- tracker migration. Converted copies call it through ns.Start(); the unwrapped standalone path reaches it through its
 -- ADDON_LOADED frame.
 local function InitializeStore()
-	-- Forever Leaderboards and peer stats are gone, so drop the one saved choice core kept for them: the window's
-	-- reach. Nothing else in ForeverCoreDB belonged to them.
+	-- Forever Leaderboards, peer stats and the Forever quest list are gone, and nothing migrates their saved data, so
+	-- drop it: the leaderboard window's reach, and the list's switch, hint answer and per-character folds.
 	local store = ns.Store()
 	if type(store) == "table" then
 		store.leaderboards = nil
+		store.questList, store.questListHintDone, store.questListFold = nil, nil, nil
 	end
 	-- Building the host's table here is also the normalisation the host reads on every access.
 	ns.TrackerHostSettings()

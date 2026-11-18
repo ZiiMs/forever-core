@@ -1,4 +1,5 @@
--- Shared stubs for the tracker host specs: one private host over a stubbed native tracker.
+-- Shared stubs for the tracker host specs: one private host on a stubbed UIParent, and a native tracker it only names
+-- as an anchor.
 local harness = {}
 
 function harness.new(options)
@@ -15,14 +16,42 @@ function harness.new(options)
 	local initializationEvents
 	local combat = false
 	local parent
-	local nativeAnchorPoint = options.nativeAnchorPoint or "TOPRIGHT"
+	-- The native tracker's geometry, which only the spec reads and moves. A frame anchored to the native tracker
+	-- resolves through it, as the engine resolves an anchor, so the host never has to read the tracker itself.
+	local native
+	local nativeRect = { left = 1200 - 260, top = 880, width = 260, height = 300 }
+	local function Along(name, low, size)
+		if name:find("LEFT") or name:find("BOTTOM") then
+			return low
+		elseif name:find("RIGHT") or name:find("TOP") then
+			return low + size
+		end
+		return low + size / 2
+	end
+	-- The frame's left and top when its one point names the native tracker, nil otherwise.
+	local function Anchored(self)
+		local p = self.point
+		if not p or p[2] ~= native then
+			return nil
+		end
+		local x = Along(p[3]:gsub("TOP", ""):gsub("BOTTOM", ""), nativeRect.left, nativeRect.width) + (p[4] or 0)
+		local y = Along(p[3]:gsub("LEFT", ""):gsub("RIGHT", ""), nativeRect.top - nativeRect.height, nativeRect.height)
+			+ (p[5] or 0)
+		local horizontal = p[1]:gsub("TOP", ""):gsub("BOTTOM", "")
+		local vertical = p[1]:gsub("LEFT", ""):gsub("RIGHT", "")
+		local left = x - (Along(horizontal, 0, self:GetWidth()))
+		local top = y + self:GetHeight() - Along(vertical, 0, self:GetHeight())
+		return left, top
+	end
 	local function frame()
 		local f = { width = 250, height = 0, scripts = {} }
 		function f:SetPoint(...)
 			self.point = { ... }
+			self.points = self.points or {}
+			self.points[(...)] = self.point
 		end
 		function f.GetPoint(self)
-			return unpack(self.point or { nativeAnchorPoint, parent, nativeAnchorPoint, 0, -100 })
+			return unpack(self.point or { "TOPRIGHT", parent, "TOPRIGHT", 0, -100 })
 		end
 		function f:SetWidth(value)
 			self.width = value
@@ -49,12 +78,24 @@ function harness.new(options)
 			self.scale = value
 		end
 		function f.GetTop(self)
-			return self.top or 640
+			local _, top = Anchored(self)
+			return self.top or top or 640
+		end
+		-- As in the client, a scroll child has no rect in the frame its ScrollFrame takes it, and a frame hung by its
+		-- top alone (`topOnly`) has none at height 0, which the client reads as no height (#795).
+		local function Unplaced(self)
+			return self.unplaced or (self.topOnly and (self.height or 0) == 0)
 		end
 		function f.GetLeft(self)
-			return self.left or 0
+			if Unplaced(self) then
+				return nil
+			end
+			return self.left or Anchored(self) or 0
 		end
 		function f.GetRight(self)
+			if Unplaced(self) then
+				return nil
+			end
 			return self.right or self:GetLeft() + self:GetWidth()
 		end
 		function f.GetBottom(self)
@@ -105,14 +146,19 @@ function harness.new(options)
 			return self.parent
 		end
 		function f:ClearAllPoints()
-			self.point = nil
+			self.point, self.points = nil, nil
 		end
 		function f:SetAlpha(value)
 			self.alpha = value
 		end
+		-- As the client: a scroll child has no rect in the frame it is set, even after UpdateScrollChildRect (#795).
 		function f:SetScrollChild(child)
 			self.scrollChild = child
 			child.parent = self
+			child.unplaced = true
+		end
+		function f:SetClipsChildren(value)
+			self.clipsChildren = value
 		end
 		function f:GetScrollChild()
 			return self.scrollChild
@@ -158,7 +204,10 @@ function harness.new(options)
 			self.events = self.events or {}
 			self.events[event] = true
 		end
-		f.SetMovable, f.RegisterForDrag = noop, noop
+		f.SetMovable = noop
+		function f:RegisterForDrag(button)
+			self.dragButton = button
+		end
 		f.clamped = true
 		function f:SetClampedToScreen(value)
 			self.clamped = value
@@ -225,61 +274,20 @@ function harness.new(options)
 		frames[#frames + 1] = f
 		return f
 	end
-	local native = frame()
-	local minimap = frame()
-	minimap.left, minimap.right, minimap.top, minimap.bottom, minimap.shown = 900, 1100, 700, 500, false
+	-- The client's tracker exists, which says its section template loaded, and the column may name it as an anchor. It
+	-- never reads, writes or hooks it, so any field access fails the spec.
+	native = setmetatable({}, {
+		__index = function(_, key)
+			error("the host read the native tracker: " .. tostring(key))
+		end,
+		__newindex = function(_, key)
+			error("the host wrote the native tracker: " .. tostring(key))
+		end,
+	})
 	parent = frame()
-	native.parent = parent
 	parent.width = 1200
-	native.point = { nativeAnchorPoint, parent, nativeAnchorPoint, 0, -100 }
-	native.height = 300
 	parent:SetHeight(1080)
-	native.effectiveScale, parent.effectiveScale = 1.25, 1
-	local nativeHeader = frame()
-	nativeHeader.shown = options.headerShown == true
-	nativeHeader.parent = native
-	nativeHeader.point = { "TOPLEFT", native, "TOPLEFT", 0, 0 }
-	local minimizeButton = frame()
-	nativeHeader.MinimizeButton = minimizeButton
-	native.Header = nativeHeader
-	native.headerWanted = options.headerShown == true
-	-- The native container anchors this to the bottom of its last shown module: here 100 px of quests below its top.
-	native.NineSlice = {
-		bottom = 540,
-		GetBottom = function(self)
-			return self.bottom
-		end,
-		GetCenter = function()
-			return native:GetCenter()
-		end,
-		GetEffectiveScale = function()
-			return native:GetEffectiveScale()
-		end,
-	}
-	-- Blizzard's tracker re-anchors its header at the end of every update.
-	function native.UpdateHeaderPosition()
-		nativeHeader:SetPoint("TOPLEFT", native, "TOPLEFT", 0, 0)
-	end
-	function native:ShouldShowHeader()
-		return self.headerWanted and self:IsShown()
-	end
-	-- Mirrors the client update order: header visibility, objective layout, then unconditional header re-anchor.
-	function native:UpdateOrder()
-		if not self:ShouldShowHeader() then
-			nativeHeader:Hide()
-		else
-			nativeHeader:Show()
-		end
-		self:UpdateHeaderPosition()
-		return self:ShouldShowHeader()
-	end
-	-- The managed-frame layout calls this after it re-anchors the frame to its saved slot.
-	function native.UpdateHeight() end
-	-- A native tracker update re-anchors the frame to its saved slot and finishes at the header.
-	function native.RestoreSavedAnchor()
-		native:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -100)
-		native:UpdateHeaderPosition()
-	end
+	parent.effectiveScale = 1
 	local ns = options.ns or {
 		L = setmetatable({}, {
 			__index = function(_, key)
@@ -287,7 +295,8 @@ function harness.new(options)
 			end,
 		}),
 	}
-	local hostSettings = options.hostSettings or { attached = true }
+	-- A table already past the one-time move off the quest tracker; a spec covers the migration itself.
+	local hostSettings = options.hostSettings or { attached = false }
 	function ns.TrackerHostSettings()
 		return hostSettings
 	end
@@ -296,18 +305,6 @@ function harness.new(options)
 			error("native manager accessed: " .. key)
 		end,
 	})
-	local callbacks = {}
-	local eventRegistry = {
-		RegisterCallback = function(_, event, callback, owner)
-			callbacks[event] = callbacks[event] or {}
-			callbacks[event][#callbacks[event] + 1] = { callback = callback, owner = owner }
-		end,
-		TriggerEvent = function(_, event, ...)
-			for _, entry in ipairs(callbacks[event] or {}) do
-				entry.callback(entry.owner, ...)
-			end
-		end,
-	}
 	-- The shared context menu, recorded so a spec can read back what a click offered. An entry with no callback and
 	-- entries of its own is a submenu, as inserting elements into an element description makes one in the client.
 	local function captureMenu(owner, generator)
@@ -335,16 +332,6 @@ function harness.new(options)
 		return menu
 	end
 	ns.ContextMenu = captureMenu
-	local editMode = { active = false, shown = false, scripts = {} }
-	function editMode:IsEditModeActive()
-		return self.active
-	end
-	function editMode:IsShown()
-		return self.shown
-	end
-	function editMode:HookScript(kind, fn)
-		self.scripts[kind] = fn
-	end
 	local env
 	env = setmetatable({
 		ObjectiveTrackerManager = forbidden,
@@ -352,7 +339,6 @@ function harness.new(options)
 			return combat
 		end,
 		ObjectiveTrackerFrame = native,
-		Minimap = minimap,
 		UIParent = parent,
 		CreateFrame = function(kind, _, _, template)
 			local f = frame()
@@ -370,8 +356,7 @@ function harness.new(options)
 				readyFn = fn
 			end,
 		},
-		EventRegistry = eventRegistry,
-		EditModeManagerFrame = editMode,
+		EventRegistry = { RegisterCallback = noop },
 		C_XMLUtil = {
 			GetTemplateInfo = function()
 				return { type = "Frame" }
@@ -471,18 +456,8 @@ function harness.new(options)
 		textures = textures,
 		releases = releases,
 		native = native,
+		nativeRect = nativeRect,
 		parent = parent,
-		minimap = minimap,
-		nativeHeader = nativeHeader,
-		updateOrder = function()
-			return native:UpdateOrder()
-		end,
-		headerShown = function()
-			return native:ShouldShowHeader()
-		end,
-		minimizeButton = minimizeButton,
-		eventRegistry = eventRegistry,
-		editMode = editMode,
 		menus = menus,
 		check = check,
 		checks = function()
@@ -510,9 +485,6 @@ function harness.new(options)
 		inCombat = function()
 			return combat
 		end,
-		setNativeAnchorPoint = function(value)
-			nativeAnchorPoint = value
-		end,
 	}
 	-- Delivers a client event to the host only when the host registered it, as the client does.
 	function ctx.fire(event)
@@ -526,7 +498,7 @@ function harness.new(options)
 		path = path or "UI/TrackerHost.lua"
 		setfenv(assert(loadfile("UI/ContextMenu.lua")), env)("Test", namespace)
 		namespace.ContextMenu = captureMenu
-		setfenv(assert(loadfile("UI/TrackerLock.lua")), env)("Test", namespace) -- the grip, before the host
+		setfenv(assert(loadfile("UI/TrackerLock.lua")), env)("Test", namespace) -- the header drag, before the host
 		setfenv(assert(loadfile("UI/TrackerOrder.lua")), env)("Test", namespace) -- the section order
 		setfenv(assert(loadfile(path)), env)("Test", namespace)
 	end
@@ -598,12 +570,24 @@ function harness.new(options)
 	function ctx.blocksReleased()
 		return released
 	end
-	function ctx.probe()
-		for _, f in ipairs(frames) do
-			if f.point and f.point[2] == native and f.scripts.OnSizeChanged then
-				return f
-			end
+	-- A left-button press on a section header that drags, as the client sends it; `release` lets go.
+	function ctx.drag(header, release)
+		header.scripts.OnMouseDown(header, "LeftButton")
+		header.scripts.OnDragStart(header)
+		if release then
+			release()
+			header.scripts.OnDragStop(header)
+			header.scripts.OnMouseUp(header, "LeftButton")
 		end
+	end
+	-- Where the frame's top right corner resolves, with its anchors.
+	function ctx.topRight(target)
+		return target:GetRight(), target:GetTop()
+	end
+	-- Saves a dragged position that leaves exactly `room` units for the sections under the column's top.
+	function ctx.room(room)
+		hostSettings.x, hostSettings.y = 0, room - parent:GetHeight()
+		ctx.host:MarkDirty()
 	end
 	-- A module shaped like Blizzard's own, with a real block chain, so a spec can see the shared scroll wrapper: the
 	-- cap, the viewport, the bar and the block-snapped offsets. It does not load Blizzard's source.
@@ -618,6 +602,7 @@ function harness.new(options)
 		m.trackerMaxHeight = maxHeight
 		m.Header = frame()
 		m.ContentsFrame = frame()
+		m.ContentsFrame.topOnly = true
 		m.lineTemplate = "Line"
 		m.count, m.scrollChanges = count, 0
 		function m:OnScrollChanged()
@@ -629,6 +614,9 @@ function harness.new(options)
 		function m.Update(self, available)
 			self.available, self.updates = available, (self.updates or 0) + 1
 			self.firstContentsWidth = self.firstContentsWidth or self.ContentsFrame:GetWidth()
+			if self.firstContentsLeft == nil then
+				self.firstContentsLeft = self.ContentsFrame:GetLeft() or false
+			end
 			self:BeginLayout()
 			self.contentsHeight = self.headerHeight
 			local first, last
@@ -663,7 +651,7 @@ function harness.new(options)
 		return m
 	end
 	ctx.loadHost(ns)
-	ctx.host, ctx.grip = frames[6], frames[7]
+	ctx.host = frames[2]
 	ctx.first, ctx.second = ctx.module(1), ctx.module(2)
 	if not options.deferReady then
 		ctx.ready()

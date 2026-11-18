@@ -1,18 +1,10 @@
--- The host must never enter Blizzard's tracker manager, including through pooled lines.
+-- The host must never enter Blizzard's tracker manager, including through pooled lines, and never touch the native
+-- tracker: the harness's ObjectiveTrackerFrame fails any read or write, so the column may only name it as an anchor.
 local harness = dofile("tests/tracker_host_harness.lua")
-local t = harness.new({ deferReady = true, headerShown = true })
+local t = harness.new({ deferReady = true })
 local check, drain = t.check, t.drain
-local host, grip, native, parent = t.host, t.grip, t.native, t.parent
+local host = t.host
 local first, second = t.first, t.second
--- The native tracker is protected: the host reads it and never writes it. Blizzard's own moves set `point` directly.
-for _, method in ipairs({ "SetPoint", "ClearAllPoints", "SetClampedToScreen" }) do
-	native[method] = function()
-		error("the host wrote the protected native tracker: " .. method)
-	end
-end
-local function MoveNative(...)
-	native.point = { ... }
-end
 
 check(t.pending() == 0, "must not render before player and saved data are ready")
 check(
@@ -21,42 +13,35 @@ check(
 		and #t.initializationEvents() == 2,
 	"first rendering waits for both native load events"
 )
+-- Before its first layout the column already sits at its pin and each section in it, so a reload's first pass moves
+-- nothing and a section's first build measures its lines at the width it draws at (#795).
+check(
+	host.point[1] == "TOPRIGHT" and host.point[2] == t.native and host.point[3] == "TOPLEFT",
+	"the column starts pinned"
+)
+check(first.point[2] == host and second.point[2] == host, "a section is placed in the column when it attaches")
 t.ready()
 check(t.pending() == 1, "first layout is deferred")
 drain()
-check(first.point[5] == 0 and second.point[5] == -90, "sections follow uiOrder")
-check(t.nativeHeader.point[2] == native, "native header stays anchored to its native parent")
-check(first.point[5] == 0, "visible native header reserves no top gap")
-check(native.point[1] == "TOPRIGHT" and native.point[5] == -100, "the native tracker keeps its own slot")
-check(
-	host.point[1] == "TOP" and host.point[2] == native.NineSlice and host.point[3] == "BOTTOM" and host.point[5] == 0,
-	"the column hangs from the bottom of the native quests"
-)
-t.native.headerWanted = false
-t.updateOrder()
-check(not t.headerShown(), "client update hides the native header")
-check(t.nativeHeader.point[2] == native, "hidden header remains anchored to native parent")
-t.native.headerWanted = true
-t.updateOrder()
-check(t.headerShown(), "client update shows the native header")
-check(t.nativeHeader.point[2] == native, "client update re-anchors header to native parent")
-host:MarkDirty()
-drain()
-check(t.nativeHeader.point[2] == native, "layouts leave header anchored to native parent")
+check(first.point[5] == 0 and second.point[5] == -90, "sections follow uiOrder from the column's top")
+check(host.width == 260, "the column takes the section template's width")
+-- By default the column's top right corner is pinned to the game tracker's top left corner.
+local function Pinned(ctx)
+	local point = ctx.host.point
+	return point[1] == "TOPRIGHT"
+		and point[2] == ctx.native
+		and point[3] == "TOPLEFT"
+		and point[4] == 0
+		and point[5] == 0
+end
+local function CornersTouch(ctx)
+	local right, top = ctx.host:GetRight(), ctx.host:GetTop()
+	return right == ctx.nativeRect.left and top == ctx.nativeRect.top
+end
+check(Pinned(t), "the column pins its top right corner to the game tracker's top left corner")
+check(CornersTouch(t), "the two top corners touch")
 -- The first section's 80 and the gap under it, then the gap the second section leaves under itself.
-check(
-	math.abs(second.available - (540 - 24 / 1.25 - 90 - 10)) < 1e-9,
-	"remaining space runs from the quests to the screen, less each section's gap"
-)
-check(native:GetHeight() == 300, "native viewport preserves an externally sized height before clamping")
-native:SetHeight(420)
-native.scripts.OnSizeChanged(native)
-drain()
-check(native:GetHeight() == 420, "native viewport adopts an external resize before clamping")
-native:SetHeight(700)
-native.scripts.OnSizeChanged(native)
-drain()
-check(native:GetHeight() == 700, "native container keeps its externally sized height")
+check(second.available == 880 - 90 - 10, "remaining space runs from the pin to the screen's bottom, less each gap")
 
 -- A section created just before combat may reach Attach from its deferred timer after combat starts. SetParent is
 -- protected for the quest descendants, so the host keeps the request and applies it on the first safe event.
@@ -67,52 +52,10 @@ check(combatLate.parent == nil, "combat defers a late section attachment")
 t.setCombat(false)
 t.fire("PLAYER_REGEN_ENABLED")
 check(combatLate.parent == host, "combat release applies the deferred attachment")
-MoveNative("TOPRIGHT", parent, "TOPRIGHT", 0, 0)
-t.eventRegistry:TriggerEvent("EditMode.SavedLayouts")
-drain()
-check(
-	native.point[5] == 0 and host.point[2] == native.NineSlice,
-	"a saved layout moves the tracker and the column follows it"
-)
--- The managed frame layout or a UI addon can put the native frame back in its saved slot with no event at all.
-local probe = t.probe()
-check(probe ~= nil and probe ~= host, "an addon-owned probe follows the native frame's top left corner")
-MoveNative("TOPRIGHT", parent, "TOPRIGHT", 0, -100)
-probe.scripts.OnSizeChanged(probe)
-check(t.pending() == 1, "a silent native reanchor reflows the column")
-drain()
-check(
-	native.point[5] == -100 and host.point[2] == native.NineSlice,
-	"the silent reanchor leaves the tracker where it was put"
-)
-t.editMode.active, t.editMode.shown = true, true
-t.eventRegistry:TriggerEvent("EditMode.Enter")
-check(host.shown == false, "private tracker hides while Edit Mode owns native slot")
-check(native.clamped == true, "the native frame keeps its screen clamp")
-check(probe.point == nil, "Edit Mode disconnects the native geometry probe")
-check(host.point[2] == parent, "hidden companion no longer depends on the native tracker's anchors")
-drain()
-check(native.point[1] == "TOPRIGHT", "queued layouts leave the native slot to Edit Mode")
-probe.scripts.OnSizeChanged(probe)
-check(t.pending() == 0, "a disconnected probe cannot queue a layout")
--- CheckHideAndLockEditMode hides the manager without exiting it: active stays true and no EditMode.Exit runs.
-check(t.editMode.scripts.OnHide ~= nil, "private tracker follows the Edit Mode manager's own hide")
-t.editMode.shown = false
-t.editMode.scripts.OnHide(t.editMode)
-drain()
-check(host.shown == true, "private tracker returns when a locked Edit Mode hides its manager")
-t.editMode.active, t.editMode.shown = false, false
-t.eventRegistry:TriggerEvent("EditMode.Exit")
-drain()
-check(host.shown == true, "private tracker returns after Edit Mode")
-check(probe.point[2] == native, "leaving Edit Mode reconnects the native geometry probe")
-check(native.clamped == true and native.point[1] == "TOPRIGHT", "leaving Edit Mode leaves the native tracker alone")
+for _, event in ipairs({ "QUEST_LOG_UPDATE", "QUEST_WATCH_UPDATE", "ZONE_CHANGED_NEW_AREA" }) do
+	check(not host.events[event], "the column watches no quest events: " .. event)
+end
 check(t.ns.TrackerHost.IsAttached(first) and not t.ns.TrackerHost.IsAttached(nil), "ownership lookup")
-local attachmentChanges = 0
-t.ns.TrackerHost.OnAttachmentChanged(function(value)
-	attachmentChanges = attachmentChanges + 1
-	check(value == false or value == true, "attachment callback receives desired state")
-end)
 local updatesBeforeDuplicateAttach = first.updates
 t.ns.TrackerHost.Attach(first)
 host:MarkDirty()
@@ -121,137 +64,176 @@ check(t.pending() == 1, "dirty updates coalesce")
 drain()
 check(first.updates == updatesBeforeDuplicateAttach + 1, "duplicate attach must not duplicate sections")
 check(first:GetContextMenuParent() == host, "menus use private container")
-check(grip ~= nil, "the grip is shown by the detached layout")
 first.contentHeight, second.contentHeight = 0, 0
 host:MarkDirty()
 drain()
 check(host.shown == false, "host hides when no section draws")
-check(first.point[5] == 0 and second.point[5] == 0, "no header gap is reserved without section content")
-check(t.nativeHeader.point[2] == native, "empty layout leaves native header in its parent")
-local empty = harness.new({ headerShown = true })
-empty.first.contentHeight, empty.second.contentHeight = 0, 0
-empty.host:MarkDirty()
-empty.drain()
-empty.check(empty.host.shown == false, "host hides when visible header has no section content")
-empty.check(empty.first.point[5] == 0, "visible header reserves no gap without drawn content")
-empty.check(empty.nativeHeader.point[2] == empty.native, "visible header remains in native parent")
+check(first.point[5] == 0 and second.point[5] == 0, "an empty column keeps its sections at its top")
 
--- #383: a replacement UI may hide or shrink Blizzard's tracker, so the column follows only a frame it can see.
-local hidden = harness.new({ hostSettings = { attached = false } })
-hidden.native.effectiveScale, hidden.native.shown = 0.01, false
-hidden.ready()
-hidden.drain()
-hidden.check(math.abs(hidden.host:GetScale() - 1) < 1e-9, "a detached column ignores the hidden native tracker's scale")
--- IsShown is true for a frame under a hidden parent; only effective visibility says the tracker is really gone.
-local hiddenParent = harness.new({ hostSettings = { attached = true } })
-hiddenParent.native.effectiveScale, hiddenParent.native.shown, hiddenParent.parent.shown = 0.01, true, false
-hiddenParent.ready()
-hiddenParent.drain()
-hiddenParent.check(
-	math.abs(hiddenParent.host:GetScale() - 1) < 1e-9,
-	"a shown native tracker under a hidden parent is not the source"
-)
-local transparent = harness.new({ hostSettings = { attached = true } })
-transparent.native.effectiveScale, transparent.native.alpha = 0.01, 0
-transparent.ready()
-transparent.drain()
-transparent.check(math.abs(transparent.host:GetScale() - 1) < 1e-9, "a transparent native tracker is not the source")
-local visible = harness.new({ hostSettings = { attached = true } })
-visible.native.effectiveScale = 0.8
-visible.ready()
-visible.drain()
-visible.check(math.abs(visible.host:GetScale() - 0.8) < 1e-9, "a visible native tracker still sets the column's scale")
-local userScaled = harness.new({ hostSettings = { attached = true, scale = 1.5 } })
-userScaled.native.effectiveScale = 0.8
-userScaled.ready()
-userScaled.drain()
-userScaled.check(math.abs(userScaled.host:GetScale() - 1.2) < 1e-9, "the user's scale multiplies the source scale")
+-- An Edit Mode move of the game tracker carries the column with it: the engine keeps the anchor, so the host runs no
+-- layout and sets no point of its own.
+local pinned = harness.new()
+local pinPoint = pinned.host.point
+local nativeRect = pinned.nativeRect
+nativeRect.left, nativeRect.top = 400, 700
+pinned.check(pinned.pending() == 0, "a move of the game tracker queues no layout")
+pinned.check(pinned.host.point == pinPoint, "and sets no point")
+pinned.check(CornersTouch(pinned), "the corners stay together after an Edit Mode move")
+-- The pin holds whether the game tracker is shown or hidden: the host never asks which, and the harness's tracker
+-- would fail the spec if it did. A layout after the tracker hides keeps the same anchor.
+pinned.host:MarkDirty()
+pinned.drain()
+pinned.check(Pinned(pinned) and CornersTouch(pinned), "a later layout keeps the pin")
 
--- #177: the layout takes the native tracker's top while it is hidden and its NineSlice's bottom while it is shown, so a
--- visibility change must reflow the column even though Edit Mode's fixed height means the frame's size never changes.
-local visibility = harness.new({ headerShown = true })
-local visibilityHost, visibilityNative = visibility.host, visibility.native
-visibility.check(
-	visibilityHost.point[2] == visibilityNative.NineSlice and visibilityHost.point[3] == "BOTTOM",
-	"a shown native tracker holds the column under its quests"
+-- A drag on a section header gives the column a free position and releases the pin. Letting go is not a click.
+local settings = pinned.hostSettings
+local headerClicks = 0
+pinned.first.OnHeaderClick = function()
+	headerClicks = headerClicks + 1
+end
+pinned.drag(pinned.first.Header, function()
+	pinned.host.left, pinned.host.top = 100, 1080 - 200
+end)
+pinned.host.left, pinned.host.top = nil, nil
+pinned.check(headerClicks == 0, "letting go of a header drag runs no header click")
+pinned.first.Header.scripts.OnMouseDown(pinned.first.Header, "LeftButton")
+pinned.first.Header.scripts.OnMouseUp(pinned.first.Header, "LeftButton")
+pinned.check(headerClicks == 1, "a plain header click still runs")
+pinned.drain()
+pinned.check(settings.x == 100 and settings.y == -200, "a drag saves a free position")
+local point = pinned.host.point
+pinned.check(
+	point[1] == "TOPLEFT" and point[2] == pinned.parent and point[4] == 100 and point[5] == -200,
+	"a dragged column sits where it was dropped, on UIParent"
 )
-local heightWhileShown = visibilityNative:GetHeight()
-visibilityNative:Hide()
-visibility.drain()
-visibility.check(
-	visibilityHost.point[1] == "TOP"
-		and visibilityHost.point[2] == visibilityNative
-		and visibilityHost.point[3] == "TOP",
-	"hiding the native tracker moves the column to its top"
-)
-visibility.check(visibilityNative:GetHeight() == heightWhileShown, "the hidden tracker keeps its Edit Mode height")
-visibilityNative:Show()
-visibility.drain()
-visibility.check(
-	visibilityHost.point[1] == "TOP"
-		and visibilityHost.point[2] == visibilityNative.NineSlice
-		and visibilityHost.point[3] == "BOTTOM",
-	"showing the native tracker moves the column back under its quests"
-)
-visibility.check(
-	visibilityNative:GetHeight() == heightWhileShown,
-	"the shown tracker still has no size change to report"
-)
+nativeRect.left = 300
+pinned.host:MarkDirty()
+pinned.drain()
+pinned.check(pinned.host.point[2] == pinned.parent, "a dragged column no longer follows the game tracker")
+local function Entry(entries, text)
+	for _, entry in ipairs(entries) do
+		if entry.text == text then
+			return entry
+		end
+	end
+end
+pinned.host.shown = true
+pinned.first.Header.scripts.OnMouseUp(pinned.first.Header, "RightButton")
+-- Moving is the header drag and the Lock switch in this menu, nothing else.
+local entries = pinned.menus[#pinned.menus].entries
+pinned.check(Entry(entries, "Lock the tracker") ~= nil, "the section menu offers Lock")
+pinned.check(Entry(entries, "Reset position") == nil, "and no Reset entry")
 
--- The room-below pass must not be a probe: Blizzard's EndLayout hides a section that fits nothing and
--- FreeUnusedBlocks releases every block, so a second layout would replay each header's add animation and rebuild every
--- block. Issue #438. The section uses Blizzard's own module mixin, which the native tracker source supplies.
-local asideChecks = 0
+-- Old placements migrate once to the pin and keep the player's Lock choice: an attached one drops its saved spot, and
+-- a beside one never had one.
+local migrated = harness.new({ hostSettings = { attached = true, locked = true, x = 10, y = -20 } })
+settings = migrated.hostSettings
+migrated.check(settings.attached == false, "an attached placement is marked migrated")
+migrated.check(settings.x == nil and settings.y == nil, "the attached placement's old spot is dropped")
+migrated.check(settings.locked == true, "the player's Lock choice survives the migration")
+migrated.check(Pinned(migrated), "a migrated attached column is pinned")
+local unset = harness.new({ hostSettings = { x = 30, y = -40 } })
+unset.check(unset.hostSettings.x == nil and Pinned(unset), "a missing attached flag was the old default and migrates")
+local beside = harness.new({ hostSettings = { attached = false, locked = true } })
+beside.check(Pinned(beside) and beside.hostSettings.locked == true, "a beside placement migrates to the pin")
+-- Once the store exists, a dragged column goes straight to its saved spot, before any layout pass could move it.
+local early = harness.new({ deferReady = true, hostSettings = { attached = false, x = 50, y = -60 } })
+early.ns.MigrateTrackerSettings()
+early.check(early.pending() == 0, "placing from the store queues no layout before ready")
+early.check(
+	early.host.point[1] == "TOPLEFT" and early.host.point[4] == 50 and early.host.point[5] == -60,
+	"the store's dragged spot is the column's place before its first layout"
+)
+-- The migration is one-time: a position saved afterwards sticks.
+migrated.ns.TrackerHost.SavePosition(50, -60)
+migrated.drain()
+migrated.check(settings.x == 50 and settings.y == -60, "a position saved after the migration is kept")
+migrated.check(migrated.host.point[4] == 50 and migrated.host.point[5] == -60, "the column moves to the saved spot")
+-- The retired attach switch answers false and changes nothing.
+migrated.ns.TrackerHost.SetAttached(true)
+migrated.drain()
+migrated.check(migrated.ns.TrackerHost.IsAttachedToQuestTracker() == false, "the column never reports attached")
+migrated.check(settings.attached == false and settings.x == 50, "SetAttached changes no saved setting")
+migrated.check(migrated.host.point[4] == 50 and migrated.host.point[5] == -60, "SetAttached moves nothing")
+local notified = false
+migrated.ns.TrackerHost.OnAttachmentChanged(function()
+	notified = true
+end)
+migrated.ns.TrackerHost.SetAttached(false)
+migrated.check(not notified, "an attachment callback is never called")
+
+-- A layout during a drag leaves the column where the drag holds it.
+local dragged = harness.new({ hostSettings = { attached = false, x = 100, y = -200 } })
+dragged.drag(dragged.first.Header)
+dragged.host.point = { "TOPLEFT", dragged.parent, "TOPLEFT", 300, -300 }
+dragged.host:MarkDirty()
+dragged.drain()
+dragged.check(dragged.host.point[4] == 300 and dragged.host.point[5] == -300, "a layout mid-drag moves nothing")
+
+-- An explicit free position the player dragged is kept as it is.
+local free = harness.new({ hostSettings = { attached = false, x = 100, y = -200 } })
+free.check(free.host.point[4] == 100 and free.host.point[5] == -200, "a saved free position is kept")
+
+-- The column's scale is only the player's own, and the pin keeps its corner whatever the scale.
+local userScaled = harness.new({ hostSettings = { attached = false, scale = 1.5 } })
+userScaled.check(math.abs(userScaled.host:GetScale() - 1.5) < 1e-9, "the user's scale sets the column's scale")
+userScaled.check(Pinned(userScaled), "a scaled column stays pinned")
+
+-- No runtime file writes to the game's quest tracker: every mention of ObjectiveTrackerFrame in a file the TOC loads is
+-- a presence check or an anchor argument, never a field, a method call or an assignment.
+local writes = {}
+for line in io.lines("ForeverCore.toc") do
+	local path = line:match("^([%w_\\/]+%.lua)%s*$")
+	if path then
+		path = path:gsub("\\", "/")
+		local number = 0
+		for source in io.lines(path) do
+			number = number + 1
+			local code = source:gsub("%-%-.*$", "")
+			local init = 1
+			while true do
+				local _, finish = code:find("ObjectiveTrackerFrame", init, true)
+				if not finish then
+					break
+				end
+				local after = code:sub(finish + 1)
+				if after:match("^%s*[%.:%[]") or (after:match("^%s*=") and not after:match("^%s*==")) then
+					writes[#writes + 1] = path .. ":" .. number
+				end
+				init = finish + 1
+			end
+		end
+	end
+end
+check(#writes == 0, "nothing in core touches ObjectiveTrackerFrame: " .. table.concat(writes, ", "))
+
+-- A repeated layout must not be a probe: Blizzard's EndLayout hides a section that fits nothing and FreeUnusedBlocks
+-- releases every block, so a second layout would replay each header's add animation and rebuild every block. Issue
+-- #438. The section uses Blizzard's own module mixin, which the native tracker source supplies.
+local stackedChecks = 0
 if t.env.ObjectiveTrackerModuleMixin then
-	local stacked = harness.new({ deferReady = true, headerShown = true })
+	local stacked = harness.new({ deferReady = true })
 	stacked.first.contentHeight, stacked.second.contentHeight = 0, 0
 	stacked.nativeModule(3)
 	stacked.ready()
 	stacked.drain()
-	stacked.check(stacked.host.point[2] == stacked.native.NineSlice, "the column starts below the quests")
-	-- The quests reach the bottom of the screen: nothing fits below the native content bottom.
-	stacked.native.NineSlice.bottom = 10
-	stacked.host:MarkDirty()
-	stacked.drain()
-	stacked.check(stacked.host.point[2] == stacked.native, "the column moves above or beside the tracker")
 	local animations, releases = stacked.headerAnimations(), stacked.blocksReleased()
 	stacked.host:MarkDirty()
 	stacked.drain()
-	stacked.check(stacked.host.point[2] == stacked.native, "the column stays above or beside the tracker")
-	stacked.check(stacked.headerAnimations() == animations, "a second layout aside replays no header animation")
-	stacked.check(stacked.blocksReleased() == releases, "a second layout aside releases no block")
-	-- The quests shrink so the whole laid-out column fits below again.
-	stacked.native.NineSlice.bottom = 700
-	animations, releases = stacked.headerAnimations(), stacked.blocksReleased()
-	stacked.host:MarkDirty()
-	stacked.drain()
-	stacked.check(
-		stacked.host.point[1] == "TOP"
-			and stacked.host.point[2] == stacked.native.NineSlice
-			and stacked.host.point[3] == "BOTTOM",
-		"the column returns below the quests when they leave room for it"
-	)
-	stacked.check(stacked.headerAnimations() == animations, "the move back below replays no header animation")
-	stacked.check(stacked.blocksReleased() == releases, "the move back below releases no block")
-	animations, releases = stacked.headerAnimations(), stacked.blocksReleased()
-	stacked.host:MarkDirty()
-	stacked.drain()
-	stacked.check(stacked.host.point[2] == stacked.native.NineSlice, "the column stays below the quests")
-	stacked.check(stacked.headerAnimations() == animations, "a repeated layout below replays no header animation")
-	stacked.check(stacked.blocksReleased() == releases, "a repeated layout below releases no block")
-	asideChecks = stacked.checks()
+	stacked.check(stacked.headerAnimations() == animations, "a repeated layout replays no header animation")
+	stacked.check(stacked.blocksReleased() == releases, "a repeated layout releases no block")
+	stackedChecks = stacked.checks()
 end
 
 -- The shared scroll wrapper: every section but the one that asks for the rest caps at 200 units, the remaining one
 -- gets what the others leave, and only an overflowing section shows the minimal bar.
-local scroll = harness.new({ headerShown = true })
+local scroll = harness.new()
 local capped = scroll.scrollModule(3, 10, 40)
 local rest = scroll.scrollModule(4, 2, 40, "remaining")
 scroll.first.contentHeight, scroll.second.contentHeight = 0, 0
 scroll.host:MarkDirty()
 scroll.drain()
--- The gutter changes the contents width after the first measure, so a second pass settles the text at the new width.
-scroll.drain()
+scroll.check(scroll.pending() == 0, "the first layout settles in one frame")
 scroll.check(capped.available == 200, "a section other than Quests caps at 200 units")
 scroll.check(capped.trackerOverflow == true and capped.scrollRange == 325, "the capped section scrolls its overflow")
 scroll.check(capped:GetContentsHeight() == 200, "the capped section reports its visible height")
@@ -263,11 +245,22 @@ scroll.check(
 )
 scroll.check(capped.scrollBar:GetVisibleExtentPercentage() == 175 / 500, "the bar shows the viewport's fraction")
 scroll.check(capped.ContentsFrame:GetWidth() == capped:GetWidth() - 18, "the bar takes its 18-unit gutter")
-scroll.check(capped.firstContentsWidth == 250, "the first pass measured in the width set at creation")
-scroll.check(capped.updates >= 2, "the gutter's width change asks for another measuring pass")
+scroll.check(
+	capped.firstContentsWidth == capped:GetWidth() - 18,
+	"the first build measures its text in the column's width less the gutter"
+)
+-- A section's first build must have placed contents, or Blizzard measures every wrapped line as one row and the next
+-- line draws over it (#795). A ScrollFrame places its child only when it next draws, and a frame of height 0 has no
+-- rect, so the viewport is a clipping frame and the contents hang from the header with the cap as their height.
+scroll.check(capped.firstContentsLeft ~= false, "the first build has placed contents to wrap its lines in")
+scroll.check(capped.scrollFrame.clipsChildren == true, "the viewport clips the contents")
+scroll.check(select(2, capped.ContentsFrame:GetPoint()) == capped.Header, "the contents hang from the header")
 scroll.check(rest.available > 200 and rest:GetContentsHeight() == 125, "the remaining section takes the room left")
 scroll.check(rest.trackerOverflow == false and rest.scrollBar:IsShown() == false, "a short section has no bar")
-scroll.check(rest.ContentsFrame:GetWidth() == rest:GetWidth(), "a short section keeps the full block width")
+scroll.check(
+	rest.ContentsFrame:GetWidth() == rest:GetWidth() - 18,
+	"a short section keeps the gutter, so its text wraps the same if it starts to scroll"
+)
 
 local scrollFrame = capped.scrollFrame
 local sectionWidth = capped:GetWidth()
@@ -303,7 +296,7 @@ scroll.check(capped.scrollOffset == 60, "the wheel moves one block, not a fixed 
 scroll.check(math.abs(capped.scrollBar:GetScrollPercentage() - 60 / 325) < 1e-9, "the bar follows the view")
 capped.scrollBar:SetScrollPercentage(0.5)
 scroll.check(math.abs(capped.scrollOffset - 162.5) < 1e-9, "dragging the bar moves the view")
-scroll.check(capped.scrollFrame:GetVerticalScroll() == capped.scrollOffset, "the scroll child follows the bar")
+scroll.check(select(5, capped.ContentsFrame:GetPoint()) == capped.scrollOffset, "the contents follow the bar")
 scroll.host:MarkDirty()
 scroll.drain()
 scroll.check(capped.scrollOffset == 160, "a layout keeps the same block at the top of the view")
@@ -354,7 +347,8 @@ scroll.check(capped.scrollOffset == 60, "wheel input over content scrolls the ow
 rest.ContentsFrame.GetChildren = function()
 	return wheelChild
 end
-rest.count = 10
+-- Thirty 40 unit blocks overflow the room the free column has from the screen's top.
+rest.count = 30
 capped.scrollOffset, rest.scrollOffset = 0, 0
 scroll.host:MarkDirty()
 scroll.drain()
@@ -369,13 +363,12 @@ scroll.host:MarkDirty()
 scroll.drain()
 scroll.check(capped.trackerOverflow == false and capped.scrollRange == 0, "a shrunken list no longer overflows")
 scroll.check(capped.scrollOffset == 0, "a shrunken list returns to the top")
-scroll.check(capped.scrollFrame:GetVerticalScroll() == 0, "the scroll child returns to the top")
+scroll.check(select(5, capped.ContentsFrame:GetPoint()) == 0, "the contents return to the top")
 scroll.check(capped.scrollBar:IsShown() == false, "the shrunken list hides the bar")
 scroll.check(capped.scrollChanges > scrollChanges, "the shrunken list redraws its item buttons")
 
 -- Two visible sections with little room reserve their measured floors without allowing the column to overrun it.
-scroll.native.NineSlice.bottom = 100
-scroll.host:MarkDirty()
+scroll.room(100)
 scroll.drain()
 scroll.check(
 	capped.available > 0 and rest.trackerViewport == 0,
@@ -387,21 +380,20 @@ scroll.check(capped:GetHeight() + rest:GetHeight() <= 100, "constrained layout k
 -- The first pass records the native metrics; the constrained pass then has 200 units, enough for two 75-unit floors
 -- and the inter-section gap. The old allocator spent the whole cap on the first section and left the second below its
 -- usable floor.
-local floors = harness.new({ headerShown = true })
+local floors = harness.new()
 floors.first.contentHeight, floors.second.contentHeight = 0, 0
 local tall = floors.scrollModule(3, 10, 40)
 local later = floors.scrollModule(4, 2, 40)
 floors.host:MarkDirty()
 floors.drain()
 floors.drain()
-floors.native.NineSlice.bottom = 240
-floors.host:MarkDirty()
+floors.room(220)
 floors.drain()
 floors.check(tall.available >= 75 and later.available >= 75, "measured floors fit across multiple sections")
 floors.check(tall:GetHeight() + later:GetHeight() + 10 <= 220, "floor allocation keeps the constrained column bounded")
 
 -- Three sections cannot all keep their first block in 166 units. Keep complete viewports or headers.
-local cramped = harness.new({ headerShown = true })
+local cramped = harness.new()
 cramped.first.contentHeight, cramped.second.contentHeight = 0, 0
 local sections = {
 	cramped.scrollModule(3, 10, 40),
@@ -412,8 +404,7 @@ cramped.host:MarkDirty()
 cramped.drain()
 cramped.drain()
 for _, room in ipairs({ 166, 120, 105, 220 }) do
-	cramped.native.NineSlice.bottom = room + 24 / cramped.host:GetEffectiveScale()
-	cramped.host:MarkDirty()
+	cramped.room(room)
 	cramped.drain()
 	local used = 0
 	for _, section in ipairs(sections) do
@@ -440,8 +431,7 @@ for _, section in ipairs(sections) do
 		baseHeight(self)
 	end
 end
-cramped.native.NineSlice.bottom = 166 + 24 / cramped.host:GetEffectiveScale()
-cramped.host:MarkDirty()
+cramped.room(166)
 cramped.drain()
 cramped.host:MarkDirty()
 cramped.drain()
@@ -454,7 +444,7 @@ end
 cramped.check(rowTotal <= 166, "row floors keep the column bounded")
 
 -- A constrained column can clip even its first block: content wheels must traverse that block in both directions.
-local paging = harness.new({ headerShown = true })
+local paging = harness.new()
 paging.first.contentHeight, paging.second.contentHeight = 0, 0
 local oversized = paging.scrollModule(3, 1, 500)
 -- Model the real block's first objective independently of its many later rows.
@@ -474,8 +464,7 @@ end)
 oversized.ContentsFrame.GetChildren = function()
 	return objective
 end
-paging.native.NineSlice.bottom = 200
-paging.host:MarkDirty()
+paging.room(200 - 24 / 1.25)
 paging.drain()
 paging.drain()
 paging.check(oversized.trackerOverflow and oversized.trackerViewport < 500, "one tall block overflows its viewport")
@@ -534,8 +523,9 @@ oversized.trackerOverflow = false
 ContentWheel(-1)
 paging.check(oversized.scrollOffset == heldOffset, "a section without overflow ignores content wheels")
 
-print(
-	"tracker_host_spec: "
-		.. (t.checks() + asideChecks + scroll.checks() + floors.checks() + cramped.checks() + paging.checks())
-		.. " checks passed"
-)
+local total = stackedChecks
+local runs = { t, pinned, migrated, unset, beside, dragged, free, userScaled, scroll, floors, cramped, paging }
+for _, run in ipairs(runs) do
+	total = total + run.checks()
+end
+print("tracker_host_spec: " .. total .. " checks passed")

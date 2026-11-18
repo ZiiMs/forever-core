@@ -34,13 +34,9 @@ for _, path in ipairs({
 	"Core/OpenMap.lua",
 	"Core/OpenSettings.lua",
 	"Core/Text.lua",
-	"Core/MinimapButton.lua",
-	"Core/RetiredLeaderboards.lua",
 	"Core/APIKit.lua",
-	"Core/QuestOrder.lua",
 	"UI/Art.lua",
 	"UI/Report.lua",
-	"UI/ForeverFamily.lua",
 	"UI/SettingsPage.lua",
 	"UI/SettingsSections.lua",
 	"UI/TrackerHost.lua",
@@ -48,9 +44,6 @@ for _, path in ipairs({
 	"UI/TrackerSection.xml",
 	"UI/TrackerLock.lua",
 	"UI/TrackerOrder.lua",
-	"UI/TrackerQuestie.lua",
-	"UI/TrackerEqot.lua",
-	"UI/TrackerQuests.lua",
 	"UI/MapCanvas.lua",
 	"UI/QuestLogTabs.lua",
 	"UI/ProfessionTabs.lua",
@@ -60,7 +53,7 @@ for _, path in ipairs({
 	check(shipped[path] == true, "TOC does not load " .. path)
 end
 check(files[#files] == "Expose.lua", "Expose.lua loads last, after every module it publishes")
--- The lock, order and questie modules answer the host, so they load before it.
+-- The lock and order modules answer the host, so they load before it.
 local hostAt, sectionAt, lockAt, menuAt
 for index, path in ipairs(files) do
 	hostAt = path == "UI/TrackerHost.lua" and index or hostAt
@@ -150,8 +143,8 @@ check(type(ns.TrackerHostSettings) == "function", "Core.lua publishes the host's
 check(ns.Defaults == nil, "the old defaults field is gone")
 local settings = ns.TrackerHostSettings()
 check(
-	settings.attached == true and settings.locked == false and settings.scale == 1 and settings.backdropOpacity == 0,
-	"a fresh install docks the column with no backdrop"
+	settings.attached == false and settings.locked == false and settings.scale == 1 and settings.backdropOpacity == 0,
+	"a fresh install gets a free, unlocked column with no backdrop"
 )
 check(ns.TrackerHostSettings() ~= settings, "a table with no saved variables is never kept")
 check(ns.Store() == nil, "a pre-saved-variables read caches no placeholder store")
@@ -167,10 +160,18 @@ check(saved.locked == false, "a broken Lock switch falls back to off")
 check(saved.backdropOpacity == 0, "a broken backdrop opacity falls back to off")
 check(env.ForeverCoreDB.trackerHost == saved, "the saved table is the one kept")
 
--- The retired leaderboards choice is cleared when core loads, so no dead data lingers.
+-- The retired leaderboards choice and quest list data are cleared when core loads, so no dead data lingers.
 env.ForeverCoreDB.leaderboards = { reach = "met" }
+env.ForeverCoreDB.questList, env.ForeverCoreDB.questListHintDone = false, true
+env.ForeverCoreDB.questListFold = { ["Player-Realm"] = { quests = { [1] = true } } }
 coreFrames[1].scripts.OnEvent(coreFrames[1], "ADDON_LOADED", "ForeverCore")
 check(env.ForeverCoreDB.leaderboards == nil, "the old leaderboards choice is cleared on load")
+check(
+	env.ForeverCoreDB.questList == nil
+		and env.ForeverCoreDB.questListHintDone == nil
+		and env.ForeverCoreDB.questListFold == nil,
+	"the retired quest list's switch, hint answer and folds are cleared on load"
+)
 
 -- A first install has no ForeverCoreDB at ForeverCore's ADDON_LOADED: Core.lua's one handler makes the table, then runs
 -- core's attach and the tracker migration through the hooks those files register, in that order.
@@ -188,27 +189,21 @@ check(env.ForeverCoreDB == nil, "another addon's ADDON_LOADED creates nothing")
 coreFrames[1].scripts.OnEvent(coreFrames[1], "ADDON_LOADED", "ForeverCore")
 check(type(env.ForeverCoreDB) == "table", "the first install gets a saved table")
 check(type(env.ForeverCoreDB.trackerHost) == "table", "with the host's settings")
-check(env.ForeverCoreDB.trackerHost.attached == true, "built from the one defaults constructor")
+check(env.ForeverCoreDB.trackerHost.attached == false, "built from the one defaults constructor")
 check(order[1] == "attach" and order[2] == "migrate", "core attaches before the tracker migration")
 
 -- Expose.lua publishes the one public table and the per-addon factory.
 ns.TrackerHost = { name = "host" }
 ns.TrackerSection, ns.TrackerLine = { name = "section" }, { name = "line" }
 ns.TrackerLock, ns.TrackerOrder = { name = "lock" }, { name = "order" }
-ns.TrackerQuestie, ns.TrackerEqot, ns.TrackerQuests = { name = "questie" }, { name = "eqot" }, { name = "quests" }
 ns.QuestLogTabs, ns.ProfessionTabs = { name = "tabs" }, { name = "professions" }
-ns.RetiredLeaderboards, ns.RetiredPeerStats = { name = "retired boards" }, { name = "retired peers" }
-ns.MinimapButton, ns.SettingsPage, ns.SettingsSections =
-	{ name = "minimap" }, { name = "settings" }, { name = "sections" }
-ns.Text, ns.QuestOrder = { name = "text" }, function()
-	return {}
-end
+ns.SettingsPage, ns.SettingsSections = { name = "settings" }, { name = "sections" }
+ns.Text = { name = "text" }
 ns.OpenMap, ns.OpenSettingsPanel = function()
 	return true
 end, function()
 	return true
 end
-ns.Family = { name = "family" }
 ns.CreditsPage = {
 	Register = function()
 		return true
@@ -276,18 +271,11 @@ for _, field in ipairs({
 	"TrackerLine",
 	"TrackerLock",
 	"TrackerOrder",
-	"TrackerQuestie",
-	"TrackerEqot",
-	"TrackerQuests",
 	"QuestLogTabs",
 	"ProfessionTabs",
-	"PeerStats",
-	"Leaderboards",
-	"MinimapButton",
 	"SettingsPage",
 	"SettingsSections",
 	"Text",
-	"QuestOrder",
 	"OpenMap",
 	"OpenSettingsPanel",
 	"Family",
@@ -303,10 +291,24 @@ check(
 		and ForeverCore.TrackerLine == ns.TrackerLine,
 	"and the modules"
 )
-check(
-	ForeverCore.Leaderboards == ns.RetiredLeaderboards and ForeverCore.PeerStats == ns.RetiredPeerStats,
-	"and the retired leaderboards shims"
-)
+local retired = { "TrackerQuests", "TrackerQuestie", "TrackerEqot", "QuestOrder", "Leaderboards", "PeerStats" }
+for _, field in ipairs(retired) do
+	check(ForeverCore[field] == nil, "the retired " .. field .. " is gone")
+end
+-- The Forever addons page is gone; its API stays one release as a no-op so a consumer's calls still resolve.
+check(ForeverCore.Family.Hint() == false and ForeverCore.Family.Once() == false, "the family hints do nothing")
+check(ForeverCore.Family.ShowLink() == false, "and the family link draws nothing")
+-- The minimap button is gone the same way: an older addon's Create gets no button, and its settings calls do nothing.
+check(ForeverCore.MinimapButton.Create({ name = "OldAddonMinimapButton" }) == nil, "the minimap button draws nothing")
+ForeverCore.MinimapButton.Refresh()
+ForeverCore.MinimapButton.SetShown(nil, true)
+ForeverCore.MinimapButton.Destroy(nil)
+local category = {
+	GetID = function()
+		return 7
+	end,
+}
+check(ForeverCore.Family.Register(category) == category, "Register hands the category back for GetID")
 check(ForeverCore.Attach == nil, "the old Attach helper is gone")
 check(ForeverCore.Defaults == nil, "the old Defaults field is gone")
 
