@@ -977,6 +977,8 @@ do
 	sess.env.StaticPopup_Show = function(which, message)
 		shown[#shown + 1] = which .. ":" .. tostring(message)
 	end
+	local store = {}
+	sess.env.ForeverCoreDB = store
 	sess.env.ForeverCore = legacy
 	sess:Candidate("Embedded", build(1, 16, 0))
 	local picked = sess.loader.Selected()
@@ -995,6 +997,30 @@ do
 	sess:Candidate("EmbeddedNewer", build(1, 17, 0))
 	sess.Tick()
 	equal(#shown, 1, "and never a second time in the session")
+	equal(store.outdatedNoticeVersion, "v1.15.0", "the standalone's store remembers the version it was shown for")
+
+	-- A later session with the same standalone version shows nothing; Warning still reports it. A different
+	-- installed version shows it once again.
+	for _, case in ipairs({ { version = "v1.15.0", expect = 0 }, { version = "v1.15.1", expect = 1 } }) do
+		local nextSession = newSession()
+		local laterShown = 0
+		nextSession.env.StaticPopupDialogs = {}
+		nextSession.env.StaticPopup_Show = function()
+			laterShown = laterShown + 1
+		end
+		nextSession.env.C_AddOns = {
+			GetAddOnMetadata = function()
+				return case.version
+			end,
+		}
+		nextSession.env.ForeverCoreDB = store
+		nextSession.env.ForeverCore = legacy
+		nextSession:Candidate("Embedded", build(1, 16, 0))
+		nextSession.Fire("PLAYER_ENTERING_WORLD", false, true)
+		nextSession.Tick()
+		equal(laterShown, case.expect, case.version .. ": the notice shows once per standalone version")
+		check(nextSession.loader.Warning() ~= nil, case.version .. ": Warning still reports it")
+	end
 end
 
 -- The loading frame records PLAYER_ENTERING_WORLD and VARIABLES_LOADED once seen, with the first entry's arguments, so
@@ -1140,6 +1166,31 @@ for _, case in ipairs({
 	equal(kinds[1], "supervise", case.name .. ": the trace says the registry is supervised")
 end
 
+-- A standalone at the same build as the newest embedded copy is not outdated: no notice, no warning, in either
+-- registry.
+for _, older in ipairs({ false, "tests/fixtures/loader_revision1.lua" }) do
+	local label = older and "revision 1 registry" or "this registry"
+	local sess = newSession(older or nil)
+	local count = 0
+	sess.env.StaticPopupDialogs = {}
+	sess.env.StaticPopup_Show = function()
+		count = count + 1
+	end
+	sess.env.C_AddOns = {
+		GetAddOnMetadata = function()
+			return "v1.16.0"
+		end,
+	}
+	sess.env.ForeverCoreDB = {}
+	sess.env.ForeverCore = legacy
+	sess:Candidate("Embedded", build(1, 16, 0))
+	sess.Fire("PLAYER_LOGIN")
+	sess.Fire("PLAYER_ENTERING_WORLD", true, false)
+	sess.Tick()
+	equal(count, 0, label .. ": an up-to-date standalone gets no notice")
+	check(sess.loader.Warning == nil or sess.loader.Warning() == nil, label .. ": and no warning")
+end
+
 -- The released 1.15.0 standalone: its revision 1 loader loads first and its pre-loader table is published at file load,
 -- so revision 1 adopts it as legacy at the first Begin. The newer embedded copy's supervisor shows the outdated
 -- notice once at the world entry.
@@ -1155,6 +1206,8 @@ do
 			return "v1.15.0"
 		end,
 	}
+	local supervisedStore = { outdatedNoticeVersion = "v1.14.0" }
+	sess.env.ForeverCoreDB = supervisedStore
 	sess.env.ForeverCore = legacy
 	sess:Candidate("Embedded", build(1, 16, 0))
 	equal(sess.loader.Selected() and sess.loader.Selected().mode, "legacy", "revision 1 adopts the standalone")
@@ -1165,6 +1218,7 @@ do
 	equal(#shown, 1, "the outdated notice shows once")
 	check(shown[1]:find("v1.15.0", 1, true) and shown[1]:find("1.16.0", 1, true), "naming both versions")
 	check((sess.loader.Warning() or ""):find("Update or disable ForeverCore", 1, true), "and Warning reports it")
+	equal(supervisedStore.outdatedNoticeVersion, "v1.15.0", "the version it was shown for is remembered")
 	equal(#sess.boots, 0, "still no second runtime")
 end
 

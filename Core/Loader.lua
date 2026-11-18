@@ -44,7 +44,7 @@ local function OutdatedText(version, newest)
 		.. " your addons include. Update or disable ForeverCore."
 end
 
--- The outdated-standalone notice, on screen on the next frame. Never a chat line. Callers show it once per session.
+-- The outdated-standalone notice, on screen on the next frame. Never a chat line. NoticeOnce decides whether it shows.
 local function ShowNotice(text)
 	local function show()
 		local dialogs = rawget(_G, "StaticPopupDialogs")
@@ -62,6 +62,23 @@ local function ShowNotice(text)
 	else
 		show()
 	end
+end
+
+-- A player may keep an older standalone on purpose, so the notice shows once per installed standalone version. The
+-- version it was shown for is kept in that standalone's own saved table (ForeverCoreDB, loaded before the world
+-- entry), which exists whenever this notice can apply. Loader.Warning and the startup report keep the line.
+local NOTICE_KEY = "outdatedNoticeVersion"
+local function NoticeOnce(version, text)
+	local db = rawget(_G, "ForeverCoreDB")
+	local key = tostring(version or "?")
+	if type(db) == "table" then
+		if db[NOTICE_KEY] == key then
+			return false
+		end
+		db[NOTICE_KEY] = key
+	end
+	ShowNotice(text)
+	return true
 end
 
 -- An older revision that loaded first owns the registry, and its private state cannot be replaced. This copy adds
@@ -125,13 +142,14 @@ local function Supervise(old)
 				newest = copy.build
 			end
 		end
-		if newest ~= nil then
+		local installed = VersionBuild(InstalledVersion())
+		if newest ~= nil and (installed == nil or installed < newest) then
 			local text = OutdatedText(InstalledVersion(), newest)
 			old.Warning = old.Warning or function()
 				return text
 			end
 			Note("legacy", "older than embedded " .. BuildVersion(newest))
-			ShowNotice(text)
+			Note("notice", NoticeOnce(InstalledVersion(), text) and "shown" or "already shown for this version")
 		end
 	end)
 	Note("supervise", "revision 1 registry")
@@ -253,7 +271,7 @@ local function CallLogin()
 	return Protected("loginError", login)
 end
 
--- The outdated-standalone notice: once per session, after the world is entered.
+-- The outdated-standalone notice, after the world is entered (see NoticeOnce).
 local function ShowWarning()
 	if state.warning == nil or state.warningShown then
 		return
@@ -263,7 +281,8 @@ local function ShowWarning()
 		return
 	end
 	state.warningShown = true
-	ShowNotice(state.warning)
+	local shown = NoticeOnce(state.selection and state.selection.version, state.warning)
+	Trace("notice", "ForeverCore", shown and "shown" or "already shown for this version")
 end
 
 -- Logged in means PLAYER_LOGIN has fired in this session, whether this loader saw it or the client says so. A copy
@@ -496,9 +515,9 @@ local function LegacyCore()
 	end
 end
 
--- An adopted legacy table always predates every registered copy (it has no loader schema), so any registered copy
--- makes it the older runtime. It still serves the session, since a second runtime cannot start beside it, and the
--- player is told once which install to update.
+-- An adopted legacy table that is older than a registered copy still serves the session, since a second runtime cannot
+-- start beside it, and the player is told which install to update. Older means a lower build than the newest
+-- registered copy; a standalone whose version cannot be read is treated as older, since it has no loader schema.
 local function CheckLegacyAge()
 	local selection = state.selection
 	if selection == nil or selection.mode ~= "legacy" then
@@ -511,6 +530,9 @@ local function CheckLegacyAge()
 		end
 	end
 	if newest == nil or (selection.newest ~= nil and selection.newest >= newest) then
+		return
+	end
+	if selection.build ~= nil and selection.build >= newest then
 		return
 	end
 	selection.newest = newest
@@ -868,7 +890,8 @@ function Loader.Error()
 	return state.error
 end
 
--- A session that runs but should be fixed by the player (an outdated standalone), shown once on screen.
+-- A session that runs but should be fixed by the player (an outdated standalone). The on-screen notice shows once
+-- per standalone version; this stays readable every session.
 function Loader.Warning()
 	return state.warning
 end
