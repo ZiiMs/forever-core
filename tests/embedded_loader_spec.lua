@@ -1181,12 +1181,12 @@ do
 		}
 		sess.env.ForeverCore = legacy
 		sess:Candidate("Embedded", build(1, 16, 0))
-		local text = sess.loader.Warning() or ""
+		local notice = sess.loader.Warning() or ""
 		check(
-			text:find("v1.15.0", 1, true) and text:find("1.16.0", 1, true),
+			notice:find("v1.15.0", 1, true) and notice:find("1.16.0", 1, true),
 			locale .. ": the notice names both versions"
 		)
-		texts[locale] = text
+		texts[locale] = notice
 	end
 	for _, locale in ipairs({ "deDE", "esES", "esMX", "frFR", "koKR", "ptBR", "ruRU", "zhCN", "zhTW" }) do
 		check(texts[locale] ~= texts.enUS, locale .. ": the notice is translated")
