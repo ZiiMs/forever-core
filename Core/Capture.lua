@@ -213,12 +213,14 @@ function ns.DebugCaptureCatchUp()
 	end
 end
 
-if type(CreateFrame) == "function" then
-	local frame = CreateFrame("Frame")
-	frame:RegisterEvent("PLAYER_ENTERING_WORLD")
-	frame:SetScript("OnEvent", function(_, event, isInitialLogin, isReloadingUi)
-		if event == "PLAYER_ENTERING_WORLD" then
-			ns.DebugCaptureEnteringWorld(isInitialLogin, isReloadingUi)
-		end
-	end)
-end
+ns.AtStart(function()
+	if type(CreateFrame) == "function" then
+		local frame = CreateFrame("Frame")
+		frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+		frame:SetScript("OnEvent", function(_, event, isInitialLogin, isReloadingUi)
+			if event == "PLAYER_ENTERING_WORLD" then
+				ns.DebugCaptureEnteringWorld(isInitialLogin, isReloadingUi)
+			end
+		end)
+	end
+end)

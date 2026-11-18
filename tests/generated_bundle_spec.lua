@@ -178,9 +178,9 @@ do
 	)
 	check(env.ForeverCoreLoader.Selected() == nil, "an unsupported legacy facade is never selected")
 end
--- A host loaded after another copy is running (load on demand) joins that copy. Its own copy and store offer are
--- recorded as late, its files load without a packaging error, and its ready entry starts once its own ADDON_LOADED
--- has restored its account table.
+-- A host loaded after another copy is running (load on demand) joins that copy. Its own copy is recorded as late, its
+-- files load without a packaging error, its ready entry starts once its own ADDON_LOADED has restored its account
+-- table, and on the next frame that table gets the live store's mirror.
 do
 	local env, frames = FakeClient.new()
 	env.ObjectiveTrackerFrame = nil
@@ -223,6 +223,15 @@ do
 		late = late + 1
 	end
 	check(late > 0, "the late copy is recorded")
+	local timers = env.timers
+	env.timers = {}
+	for _, timer in ipairs(timers) do
+		timer()
+	end
+	check(
+		type(env.ConsumerBDB) == "table" and env.ConsumerBDB.ForeverCoreStore == loader.Namespace().Store(),
+		"the late host's account table mirrors the live store"
+	)
 end
 -- Real unwrapped canonical source is the supported API2 legacy facade fixture.
 -- It owns its already-running runtime; embedded wrappers must remain inert.

@@ -1,20 +1,83 @@
 -- ForeverCoreLoader, schema 1: the one registry every embedded ForeverCore copy in a client shares. A consumer's
--- Begin.lua calls Begin(folder, build, digest), its wrapped files call copy:Define(function(...) ... end), and its
--- End.lua calls copy:Seal(). Registration and definition run no runtime code. At PLAYER_LOGIN the loader
--- elects the highest sealed build, including standalone, and runs only that copy's chunks into a fresh
--- namespace, and publishes its facade once. A host first loaded after login activates at its own ADDON_LOADED, and
--- PLAYER_ENTERING_WORLD activates a session whose PLAYER_LOGIN the loader missed; Trace() records which one ran.
+-- Begin.lua calls Begin(folder, build, digest, chunks), its wrapped files call copy:Define(function(...) ... end), and
+-- its End.lua calls copy:Seal(). Registration and definition run no runtime code. At PLAYER_LOGIN the loader elects the
+-- highest sealed build, including standalone, and runs only that copy's chunks into a fresh namespace, and publishes
+-- its facade once. A host first loaded after login activates on the next frame after its files load,
+-- PLAYER_ENTERING_WORLD activates a session whose PLAYER_LOGIN the loader missed once SavedVariables are in, and an
+-- activation reached in combat lockdown waits for PLAYER_REGEN_ENABLED. Trace() records which path ran.
 --
--- Schema 1 is immutable. A later schema is a new global name (ForeverCoreLoader2), never an upgrade of this table: an
--- older copy must never call a newer loader's methods or the reverse. The first copy to load owns the registry for the
--- session.
+-- Schema 1 is immutable: its methods and their meaning never change. A later schema is a new global name
+-- (ForeverCoreLoader2), never an upgrade of this table. The first copy to load owns the registry for the session; a
+-- newer revision of this file that loads second supervises an older one from outside (Supervise below).
 local SCHEMA = 1
+-- Revision 1 (ForeverCore 1.15.0) activated only at PLAYER_LOGIN and had no Trace, Seen or WorldEntry.
+local REVISION = 2
+local TRACE_LIMIT = 200
 
-if rawget(_G, "ForeverCoreLoader") ~= nil then
+-- An older revision that loaded first owns the registry, and its private state cannot be replaced. This copy adds
+-- what it lacks through its public schema-1 methods only: it records the world events for Seen and WorldEntry, and
+-- activates the registry at PLAYER_ENTERING_WORLD when revision 1 missed PLAYER_LOGIN. Activation stays the old
+-- loader's own: its Activate is idempotent, and the runtime's Login guards itself (ns.loginDone).
+local function Supervise(old)
+	if old.revision ~= nil or rawget(old, "supervised") ~= nil or type(CreateFrame) ~= "function" then
+		return
+	end
+	old.supervised = REVISION
+	local seen, entry, trace = {}, nil, {}
+	local function Note(kind, detail)
+		if #trace < TRACE_LIMIT then
+			trace[#trace + 1] = { kind = kind, detail = detail }
+		end
+	end
+	old.Seen = old.Seen or function(event)
+		return seen[event] == true
+	end
+	old.WorldEntry = old.WorldEntry or function()
+		if entry ~= nil then
+			return entry[1], entry[2]
+		end
+	end
+	old.Trace = old.Trace
+		or function()
+			local out = {}
+			for index, item in ipairs(trace) do
+				out[index] = { kind = item.kind, detail = item.detail }
+			end
+			return out
+		end
+	local frame = CreateFrame("Frame")
+	frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+	frame:RegisterEvent("VARIABLES_LOADED")
+	frame:SetScript("OnEvent", function(_, event, ...)
+		seen[event] = true
+		frame:UnregisterEvent(event)
+		if event ~= "PLAYER_ENTERING_WORLD" then
+			return
+		end
+		entry = { ... }
+		if old.Selected() ~= nil or old.Error() ~= nil then
+			return
+		end
+		-- The world is entered, so every startup host's files and SavedVariables are in.
+		Note("activate", "PLAYER_ENTERING_WORLD without PLAYER_LOGIN (revision 1 registry)")
+		old.Activate()
+		local namespace = old.Namespace()
+		if namespace ~= nil and type(namespace.Login) == "function" then
+			pcall(namespace.Login)
+		end
+	end)
+	Note("supervise", "revision 1 registry")
+end
+
+local existing = rawget(_G, "ForeverCoreLoader")
+if existing ~= nil then
+	if type(existing) == "table" and existing.schema == SCHEMA and (existing.revision or 1) < REVISION then
+		Supervise(existing)
+	end
 	return
 end
 
-local Loader = { schema = SCHEMA }
+local Loader = { schema = SCHEMA, revision = REVISION }
 _G.ForeverCoreLoader = Loader
 
 local state = {
@@ -23,6 +86,7 @@ local state = {
 	loginRan = false,
 	booting = false,
 	readyRunning = false,
+	scheduled = false,
 	candidates = {},
 	byFolder = {},
 	rejections = {},
@@ -31,12 +95,12 @@ local state = {
 	storesByFolder = {},
 	trace = {},
 	seen = {},
+	addonLoaded = {},
 }
 
 -- The loader's own record of what happened, in order: each copy's begin, seal and rejection, the events that drove
 -- activation and how the boot ended. A copy that registered but never ran is otherwise silent (Selected and Error
 -- both nil), so this is what an in-game check reads to see which step was reached. Bounded, oldest dropped first.
-local TRACE_LIMIT = 200
 local function Trace(kind, folder, detail)
 	local trace = state.trace
 	if #trace >= TRACE_LIMIT then
@@ -60,6 +124,10 @@ end
 -- package, so the copy is rejected at Begin instead of competing with a number no release could have produced.
 local function ValidBuild(build)
 	return type(build) == "number" and build == build and build >= 1000000 and build % 1 == 0
+end
+
+local function BuildVersion(build)
+	return string.format("%d.%d.%d", math.floor(build / 1000000), math.floor(build / 1000) % 1000, build % 1000)
 end
 
 -- An embedded copy lives under the consumer's Libs folder. The standalone participant keeps the top-level addon
@@ -94,6 +162,17 @@ local function Protected(field, callback)
 	return ok, err
 end
 
+-- Work that must not run inside the event dispatch that triggered it runs on the next frame. Without C_Timer (a test
+-- harness) it runs at once.
+local function NextFrame(callback)
+	local timer = rawget(_G, "C_Timer")
+	if type(timer) == "table" and type(timer.After) == "function" then
+		timer.After(0, callback)
+	else
+		callback()
+	end
+end
+
 -- One login per session, after activation and its ready callbacks. Legacy and a failed boot have no namespace, so
 -- they never run it. A converted runtime defines namespace.Login; a copy that does not is a broken package.
 local function CallLogin()
@@ -110,12 +189,33 @@ local function CallLogin()
 	return Protected("loginError", login)
 end
 
+-- The outdated-standalone notice: once per session, on screen, after the world is entered. Never a chat line.
+local function ShowWarning()
+	if state.warning == nil or state.warningShown then
+		return
+	end
+	if not state.seen.PLAYER_ENTERING_WORLD then
+		state.warnAtEntry = true
+		return
+	end
+	NextFrame(function()
+		local dialogs = rawget(_G, "StaticPopupDialogs")
+		local show = rawget(_G, "StaticPopup_Show")
+		if state.warningShown or type(dialogs) ~= "table" or type(show) ~= "function" then
+			return
+		end
+		state.warningShown = true
+		dialogs.FOREVERCORE_OUTDATED = dialogs.FOREVERCORE_OUTDATED
+			or { text = "%s", button1 = rawget(_G, "OKAY") or "OK", timeout = 0, whileDead = true, hideOnEscape = true }
+		show("FOREVERCORE_OUTDATED", state.warning)
+	end)
+end
+
 -- Logged in means PLAYER_LOGIN has fired in this session, whether this loader saw it or the client says so. A copy
 -- whose file first loads after login (an addon enabled mid-session, LoadAddOn) never sees PLAYER_LOGIN.
--- PLAYER_LOGIN and ADDON_LOADED only drive activation. PLAYER_ENTERING_WORLD and VARIABLES_LOADED are also recorded
--- once seen (Loader.Seen), because a runtime that boots after either has fired must not wait for it again: an
+-- PLAYER_LOGIN and ADDON_LOADED drive activation. PLAYER_ENTERING_WORLD and VARIABLES_LOADED are also recorded once
+-- seen (Loader.Seen), because a runtime that boots after either has fired must not wait for it again: an
 -- EventUtil.ContinueAfterAllEvents registered after the event never completes.
-local ACTIVATION_EVENTS = { "PLAYER_LOGIN", "ADDON_LOADED" }
 local WORLD_EVENTS = { "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED" }
 
 local function LoggedIn()
@@ -123,66 +223,156 @@ local function LoggedIn()
 	return state.loggedIn or (type(isLoggedIn) == "function" and isLoggedIn() == true)
 end
 
--- Activation and its one login, from whichever event reached the loader first. Activation needs only sealed copies,
--- so every path below waits for a host's files to have loaded (its ADDON_LOADED) or for login itself.
-local function ActivateNow(reason, folder)
-	Trace("activate", folder, reason)
-	state.loggedIn = true
-	if state.frame ~= nil then
-		for _, event in ipairs(ACTIVATION_EVENTS) do
-			state.frame:UnregisterEvent(event)
+local function InCombat()
+	local lockdown = rawget(_G, "InCombatLockdown")
+	return type(lockdown) == "function" and lockdown() == true
+end
+
+-- Booting reconciles every offered account store, so it waits until they are loaded: VARIABLES_LOADED, or the
+-- ADDON_LOADED of every host whose copy is sealed. With no sealed copy there is nothing to wait for, and activation
+-- records that instead.
+local function SavedVariablesReady()
+	if state.seen.VARIABLES_LOADED then
+		return true
+	end
+	for _, copy in ipairs(state.candidates) do
+		if copy.sealed and copy.rejected == nil and not state.addonLoaded[copy.folder] then
+			return false
 		end
 	end
+	return true
+end
+
+-- Activation and its one login, from whichever path reached the loader first. Boot creates frames and installs hooks,
+-- so under combat lockdown it waits for PLAYER_REGEN_ENABLED instead of failing for the whole session.
+local function ActivateNow(reason, folder)
+	if state.activated then
+		return
+	end
+	if InCombat() and state.frame ~= nil then
+		if state.pending == nil then
+			state.pending = { reason = reason, folder = folder }
+			Trace("wait", folder, "combat lockdown: " .. reason)
+			state.frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+		end
+		return
+	end
+	Trace("activate", folder, reason)
+	state.loggedIn = true
 	Loader.Activate()
-	CallLogin()
+	if state.activated then
+		if state.frame ~= nil then
+			state.frame:UnregisterEvent("PLAYER_LOGIN")
+		end
+		CallLogin()
+	end
+end
+
+-- After login, activation runs on the next frame rather than inside the ADDON_LOADED dispatch or the file load that
+-- asked for it: a load-on-demand host's files, SavedVariables and ADDON_LOADED handlers have all run by then, and the
+-- consumer files' event replay is the only delivery of the event it replays.
+local function ScheduleActivation(reason, folder)
+	if state.activated or state.scheduled then
+		return
+	end
+	state.scheduled = true
+	NextFrame(function()
+		state.scheduled = false
+		ActivateNow(reason, folder)
+	end)
+end
+
+-- A store offered by a host that joined an already running copy is reconciled once that host's SavedVariables and
+-- its own ADDON_LOADED handlers have run, so its account table gets the live mirror this session.
+local function ReconcileLateStore(folder)
+	local entry = state.storesByFolder[folder]
+	if entry == nil or not entry.late then
+		return
+	end
+	entry.late = nil
+	NextFrame(function()
+		local namespace = state.namespace
+		if namespace ~= nil and type(namespace.RefreshStore) == "function" then
+			Trace("store", folder, "late offer reconciled")
+			Protected("loginError", namespace.RefreshStore)
+		end
+	end)
+end
+
+local function OnEvent(frame, event, name, ...)
+	if event == "PLAYER_ENTERING_WORLD" or event == "VARIABLES_LOADED" then
+		-- Recorded before any activation below, so the runtime it boots already sees this event as past.
+		state.seen[event] = true
+		if event == "PLAYER_ENTERING_WORLD" and state.worldEntry == nil then
+			state.worldEntry = { name, ... }
+		end
+		frame:UnregisterEvent(event)
+		if event == "PLAYER_ENTERING_WORLD" and state.warnAtEntry then
+			state.warnAtEntry = nil
+			ShowWarning()
+		end
+	elseif event == "PLAYER_REGEN_ENABLED" then
+		frame:UnregisterEvent(event)
+		local pending = state.pending
+		state.pending = nil
+		if pending ~= nil then
+			ActivateNow(pending.reason .. ", after combat", pending.folder)
+		end
+		return
+	elseif event == "ADDON_LOADED" and state.byFolder[name] ~= nil then
+		state.addonLoaded[name] = true
+	end
+	if state.activated then
+		if event == "ADDON_LOADED" then
+			ReconcileLateStore(name)
+		end
+		return
+	end
+	if event == "PLAYER_LOGIN" then
+		-- All startup copies and account globals are available before election.
+		ActivateNow("PLAYER_LOGIN")
+	elseif event == "ADDON_LOADED" then
+		if state.byFolder[name] == nil then
+			return
+		end
+		if LoggedIn() then
+			ScheduleActivation("ADDON_LOADED after login", name)
+		elseif state.seen.PLAYER_ENTERING_WORLD and SavedVariablesReady() then
+			ActivateNow("PLAYER_ENTERING_WORLD without PLAYER_LOGIN", name)
+		end
+	elseif state.seen.PLAYER_ENTERING_WORLD then
+		-- PLAYER_ENTERING_WORLD, or a VARIABLES_LOADED that completes the stores it was waiting for.
+		if SavedVariablesReady() then
+			ActivateNow("PLAYER_ENTERING_WORLD without PLAYER_LOGIN")
+		elseif event == "PLAYER_ENTERING_WORLD" then
+			Trace("wait", nil, "PLAYER_ENTERING_WORLD before SavedVariables")
+		end
+	end
 end
 
 -- The one loading frame, created by the first Begin. Every copy shares it, so a second loader copy adds no event.
--- PLAYER_LOGIN is the normal path. A host loaded after login activates at its own ADDON_LOADED, once its files and
--- SavedVariables are in. PLAYER_ENTERING_WORLD follows PLAYER_LOGIN on every login and reload, so a session in which
--- this frame missed PLAYER_LOGIN still activates there, and the trace says so.
+-- PLAYER_LOGIN is the normal path. PLAYER_ENTERING_WORLD follows PLAYER_LOGIN on every login and reload, so a session
+-- in which this frame missed PLAYER_LOGIN still activates there, and the trace says so. ADDON_LOADED stays registered
+-- after activation for hosts that join the running copy.
 local function EnsureLoginFrame()
 	if state.frame ~= nil or type(CreateFrame) ~= "function" then
 		return
 	end
 	local frame = CreateFrame("Frame")
 	state.frame = frame
-	for _, event in ipairs(ACTIVATION_EVENTS) do
+	frame:RegisterEvent("PLAYER_LOGIN")
+	frame:RegisterEvent("ADDON_LOADED")
+	for _, event in ipairs(WORLD_EVENTS) do
 		frame:RegisterEvent(event)
 	end
 	if LoggedIn() then
-		-- Only a load-on-demand host first loads after login, and the client loads it once the world is entered.
+		-- A host first loaded after login is a load-on-demand addon, which the client loads once the world is
+		-- entered; no client call says so directly. The frame still records an entry that fires later.
 		for _, event in ipairs(WORLD_EVENTS) do
 			state.seen[event] = true
-		end
-	else
-		for _, event in ipairs(WORLD_EVENTS) do
-			frame:RegisterEvent(event)
 		end
 	end
-	frame:SetScript("OnEvent", function(_, event, name, ...)
-		if event == "PLAYER_ENTERING_WORLD" or event == "VARIABLES_LOADED" then
-			-- Recorded before any activation below, so the runtime it boots already sees this event as past.
-			state.seen[event] = true
-			if event == "PLAYER_ENTERING_WORLD" then
-				state.worldEntry = { name, ... }
-			end
-			frame:UnregisterEvent(event)
-		end
-		if state.activated then
-			return
-		end
-		if event == "PLAYER_LOGIN" then
-			-- All startup copies and account globals are available before election.
-			ActivateNow("PLAYER_LOGIN")
-		elseif event == "ADDON_LOADED" then
-			if state.byFolder[name] ~= nil and LoggedIn() then
-				ActivateNow("ADDON_LOADED after login", name)
-			end
-		elseif event == "PLAYER_ENTERING_WORLD" then
-			ActivateNow("PLAYER_ENTERING_WORLD without PLAYER_LOGIN")
-		end
-	end)
+	frame:SetScript("OnEvent", OnEvent)
 end
 
 local methods = {}
@@ -203,7 +393,9 @@ function methods:Define(chunk)
 	return self
 end
 
--- The End.lua marker. Only a sealed copy can be elected, so a truncated package loses without running anything.
+-- The End.lua marker. Only a sealed copy can be elected, so a truncated package loses without running anything: a
+-- copy that named its chunk count at Begin must have defined exactly that many. A copy sealed after login with no
+-- activation yet (load on demand, a manual load) activates on the next frame.
 function methods:Seal()
 	if self.rejected ~= nil then
 		return false, self.rejected
@@ -215,8 +407,15 @@ function methods:Seal()
 		self.rejected = "empty"
 		return Record(self.folder, "empty")
 	end
+	if self.expected ~= nil and #self.chunks ~= self.expected then
+		self.rejected = "incomplete"
+		return Record(self.folder, "incomplete")
+	end
 	self.sealed = true
 	Trace("seal", self.folder, #self.chunks)
+	if not state.activated and LoggedIn() then
+		ScheduleActivation("sealed after login", self.folder)
+	end
 	return true
 end
 
@@ -251,6 +450,40 @@ local function LegacyVersion()
 			return version
 		end
 	end
+end
+
+local function VersionBuild(version)
+	local major, minor, patch = string.match(tostring(version or ""), "^v?(%d+)%.(%d+)%.(%d+)")
+	if major ~= nil then
+		return tonumber(major) * 1000000 + tonumber(minor) * 1000 + tonumber(patch)
+	end
+end
+
+-- An adopted legacy table always predates every registered copy (it has no loader schema), so any registered copy
+-- makes it the older runtime. It still serves the session, since a second runtime cannot start beside it, and the
+-- player is told once which install to update.
+local function CheckLegacyAge()
+	local selection = state.selection
+	if selection == nil or selection.mode ~= "legacy" then
+		return
+	end
+	local newest
+	for _, copy in ipairs(state.candidates) do
+		if copy.rejected == nil and (newest == nil or copy.build > newest) then
+			newest = copy.build
+		end
+	end
+	if newest == nil or (selection.newest ~= nil and selection.newest >= newest) then
+		return
+	end
+	selection.newest = newest
+	state.warning = "ForeverCore "
+		.. tostring(selection.version or "")
+		.. " is older than the ForeverCore "
+		.. BuildVersion(newest)
+		.. " your addons include. Update or disable ForeverCore."
+	Trace("legacy", "ForeverCore", "older than embedded " .. BuildVersion(newest))
+	ShowWarning()
 end
 
 -- What every embedding consumer's ready step uses: API 2, Register and the tracker line with SetInteractive. One rule
@@ -293,15 +526,14 @@ end
 -- Runs the winner's chunks into one fresh namespace. Only this function may set the global facade, and only once.
 -- Each wrapped file is called with the same varargs the standalone main chunk sees: the fixed identity "ForeverCore",
 -- then the namespace. The namespace carries its mode before the first chunk and the runtime's explicit Start runs
--- before anything is published, so a failed Start leaves no facade.
+-- before anything is published, so a failed Start leaves no facade. Defining the runtime creates no frame, event or
+-- hook (tests/embedded_loader_spec.lua checks every core file), so a copy refused here leaves the client untouched.
 local function Boot(copy)
 	local namespace = { folder = copy.folder, root = copy.root, copy = copy }
 	namespace.mode = copy.standalone and "standalone" or "elected"
 	for index = 1, #copy.chunks do
 		copy.chunks[index]("ForeverCore", namespace)
 	end
-	-- Everything that can be checked without running the runtime is checked before Start, which installs hooks and
-	-- frames that cannot be undone: a copy that fails here leaves the client untouched.
 	local start = namespace.Start
 	if type(start) ~= "function" then
 		error("ForeverCore copy " .. copy.folder .. " published no namespace Start", 0)
@@ -322,15 +554,15 @@ local function Boot(copy)
 	if facade.build ~= nil and facade.build ~= copy.build then
 		error("ForeverCore copy " .. copy.folder .. " published a build that is not the sealed build", 0)
 	end
-	local existing = rawget(_G, "ForeverCore")
-	if existing ~= nil and existing ~= facade then
+	local published = rawget(_G, "ForeverCore")
+	if published ~= nil and published ~= facade then
 		error("ForeverCore copy " .. copy.folder .. " found another ForeverCore already published", 0)
 	end
 	start()
 	if namespace.ForeverCore ~= facade then
 		error("ForeverCore copy " .. copy.folder .. " replaced its facade during Start", 0)
 	end
-	local published = rawget(_G, "ForeverCore")
+	published = rawget(_G, "ForeverCore")
 	if published ~= nil and published ~= facade then
 		error("ForeverCore copy " .. copy.folder .. " found another ForeverCore already published", 0)
 	end
@@ -348,54 +580,60 @@ local function Boot(copy)
 end
 
 -- The election picks the highest sealed build. Two copies at that highest build with different content digests are
--- not interchangeable, so the loader refuses to choose between them: no folder name or load order is a reason to
--- boot one over the other. Equal builds with the same digest (including no digest) are the same package. A digest is
--- required by the final packaging contract; while it is optional here, a missing digest is not proof of equal bytes.
+-- not interchangeable (a consumer rebuilt with newer tooling, a modified package), so the loader chooses neither: no
+-- folder name or load order is a reason to boot one over the other. Every copy at that build is diagnosed and the
+-- election moves to the next lower sealed build. Equal builds with the same digest (including no digest) are the
+-- same package. A missing digest is not proof of equal bytes.
 local function Elect()
-	local bestBuild
-	local firstDigest
-	local digestsDiffer = false
-	for _, copy in ipairs(state.candidates) do
-		if copy.sealed and copy.rejected == nil then
-			if bestBuild == nil or copy.build > bestBuild then
-				bestBuild = copy.build
-				firstDigest = copy.digest
-				digestsDiffer = false
-			elseif copy.build == bestBuild and copy.digest ~= firstDigest then
-				digestsDiffer = true
+	local excluded = {}
+	while true do
+		local bestBuild
+		local firstDigest
+		local digestsDiffer = false
+		for _, copy in ipairs(state.candidates) do
+			if copy.sealed and copy.rejected == nil and not excluded[copy] then
+				if bestBuild == nil or copy.build > bestBuild then
+					bestBuild = copy.build
+					firstDigest = copy.digest
+					digestsDiffer = false
+				elseif copy.build == bestBuild and copy.digest ~= firstDigest then
+					digestsDiffer = true
+				end
 			end
 		end
-	end
-	if bestBuild == nil then
-		return nil
-	end
-	local tied = {}
-	for _, copy in ipairs(state.candidates) do
-		if copy.sealed and copy.rejected == nil and copy.build == bestBuild then
-			tied[#tied + 1] = copy
+		if bestBuild == nil then
+			return nil
 		end
+		local tied = {}
+		for _, copy in ipairs(state.candidates) do
+			if copy.sealed and copy.rejected == nil and not excluded[copy] and copy.build == bestBuild then
+				tied[#tied + 1] = copy
+			end
+		end
+		if not digestsDiffer then
+			return tied[1]
+		end
+		-- Every copy at the tied build is diagnosed, including two that share one digest: the set as a whole is the
+		-- conflict, and a report that names only the first of a repeated digest hides a candidate.
+		for _, copy in ipairs(tied) do
+			Record(copy.folder, "tie-conflict")
+			excluded[copy] = true
+		end
+		state.conflict = state.conflict or bestBuild
+		Trace("elect", nil, "conflicting copies at " .. BuildVersion(bestBuild) .. "; trying a lower build")
 	end
-	if not digestsDiffer then
-		return tied[1]
-	end
-	-- Every copy at the tied build is diagnosed, including two that share one digest: the set as a whole is the
-	-- conflict, and a report that names only the first of a repeated digest hides a candidate.
-	for _, copy in ipairs(tied) do
-		Record(copy.folder, "tie-conflict")
-	end
-	state.error = "conflicting ForeverCore copies at build " .. bestBuild
-	return nil
 end
 
--- One activation per session, and one boot inside it. A failing winner is terminal: its chunks may already have
--- installed irreversible hooks, so a lower copy is never started over them.
+-- One activation per session, and one boot inside it. A failing winner is terminal: its Start may already have
+-- installed irreversible hooks, so a lower copy is never started over it. With no sealed copy nothing ran, so the
+-- session stays open: the error is recorded, ready callbacks wait, and a host that seals later can still activate.
 function Loader.Activate()
 	if state.activated then
 		return state.facade
 	end
-	state.activated = true
 	local legacy = state.legacy or LegacyCore()
 	if legacy ~= nil then
+		state.activated = true
 		state.legacy = legacy
 		local version = LegacyVersion()
 		if not ServesConsumers(legacy) then
@@ -407,18 +645,27 @@ function Loader.Activate()
 			return nil
 		end
 		state.facade = legacy
-		state.selection = { mode = "legacy", core = legacy, version = version }
+		state.selection = { mode = "legacy", core = legacy, version = version, build = VersionBuild(version) }
 		Trace("legacy", "ForeverCore", version)
+		CheckLegacyAge()
 		RunReady()
 		return legacy
 	end
 	local chosen = Elect()
 	if chosen == nil then
-		state.error = state.error or "no sealed ForeverCore copy"
-		Trace("boot", nil, state.error)
-		RunReady()
+		if state.conflict ~= nil then
+			state.activated = true
+			state.error = "conflicting ForeverCore copies at build " .. state.conflict
+			Trace("boot", nil, state.error)
+			RunReady()
+			return nil
+		end
+		state.error = "no sealed ForeverCore copy"
+		Trace("boot", nil, state.error .. "; waiting for a sealed copy")
 		return nil
 	end
+	state.activated = true
+	state.error = nil
 	state.booting = true
 	local ok, err = pcall(Boot, chosen)
 	state.booting = false
@@ -439,15 +686,19 @@ function Loader.Activate()
 	return state.facade
 end
 
--- A copy begins once, before PLAYER_LOGIN, and registers without side effects. A late begin is rejected: a runtime
--- that has already booted cannot be replaced in place. Under an adopted legacy table a later copy may still register,
--- because nothing of it will ever run.
-function Loader.Begin(folder, build, digest)
+-- A copy begins once and registers without side effects. A begin after activation is rejected: a runtime that has
+-- already booted cannot be replaced in place. Under an adopted legacy table a later copy may still register, because
+-- nothing of it will ever run. `chunks`, when given, is the number of Define calls the package makes, so Seal can
+-- refuse a package with missing files.
+function Loader.Begin(folder, build, digest, chunks)
 	if type(folder) ~= "string" or folder == "" then
 		return Rejected(folder, "folder", build, digest)
 	end
 	if digest ~= nil and (type(digest) ~= "string" or digest == "") then
 		return Rejected(folder, "digest", build, digest)
+	end
+	if chunks ~= nil and (type(chunks) ~= "number" or chunks < 1 or chunks % 1 ~= 0) then
+		return Rejected(folder, "chunks", build, digest)
 	end
 	if state.legacy == nil then
 		state.legacy = LegacyCore()
@@ -470,6 +721,7 @@ function Loader.Begin(folder, build, digest)
 		folder = folder,
 		build = build,
 		digest = digest,
+		expected = chunks,
 		root = Root(folder),
 		chunks = {},
 		sealed = false,
@@ -478,6 +730,7 @@ function Loader.Begin(folder, build, digest)
 	state.byFolder[folder] = copy
 	state.candidates[#state.candidates + 1] = copy
 	Trace("begin", folder, build)
+	CheckLegacyAge()
 	EnsureLoginFrame()
 	return copy
 end
@@ -499,7 +752,8 @@ end
 -- The saved-variable seam. The loader retains only the folder and the explicit account SavedVariables global name; it
 -- never captures the table, accepts a getter, looks the name up, or applies any migration policy. The elected runtime
 -- resolves the name with rawget(_G, name) at reconciliation, so a registration before SavedVariables arrive and a
--- later replacement are both valid. Strategy belongs to the replaceable runtime, not this schema.
+-- later replacement are both valid. Strategy belongs to the replaceable runtime, not this schema. An offer made after
+-- activation (a host joining the running copy) is reconciled at that host's ADDON_LOADED.
 function Loader.OfferStore(folder, globalName)
 	if type(folder) ~= "string" or folder == "" then
 		return Record(folder, "store-folder")
@@ -508,18 +762,14 @@ function Loader.OfferStore(folder, globalName)
 		return Record(folder, "store-name")
 	end
 	-- The converted standalone repeats its generated offer when its runtime chunk boots.
-	local existing = state.storesByFolder[folder]
-	if existing ~= nil and existing.globalName == globalName then
+	local existingOffer = state.storesByFolder[folder]
+	if existingOffer ~= nil and existingOffer.globalName == globalName then
 		return true
 	end
-	-- Only login closes offers, including those from a generated standalone package.
-	if state.loggedIn then
-		return Record(folder, "late")
-	end
-	if state.storesByFolder[folder] ~= nil then
+	if existingOffer ~= nil then
 		return Record(folder, "duplicate")
 	end
-	local entry = { folder = folder, globalName = globalName }
+	local entry = { folder = folder, globalName = globalName, late = state.activated or nil }
 	state.stores[#state.stores + 1] = entry
 	state.storesByFolder[folder] = entry
 	return true
@@ -553,6 +803,8 @@ function Loader.Candidates()
 	return out
 end
 
+-- The running copy. A legacy selection also carries the newest registered copy's build (`newest`) when the adopted
+-- table is older than it, which is also Warning().
 function Loader.Selected()
 	if not state.activated or state.selection == nil then
 		return nil
@@ -562,6 +814,7 @@ function Loader.Selected()
 		mode = selection.mode,
 		version = selection.version,
 		build = selection.build,
+		newest = selection.newest,
 		folder = selection.folder,
 		root = selection.root,
 		core = selection.core,
@@ -580,6 +833,11 @@ end
 -- may have booted cleanly (core#509).
 function Loader.Error()
 	return state.error
+end
+
+-- A session that runs but should be fixed by the player (an outdated standalone), shown once on screen.
+function Loader.Warning()
+	return state.warning
 end
 
 function Loader.CallbackError()

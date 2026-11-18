@@ -133,7 +133,9 @@ if type(existing) == "table" then
 	return
 end
 
-local host = CreateFrame("Frame", "ForeverTrackerCompanion", UIParent)
+-- The column frame, its pools and its events are made at Start (end of file): defining the runtime touches nothing.
+---@type Frame
+local host
 ---@class ForeverTrackerHostAPI
 local api = {}
 local MIN_SCALE, MAX_SCALE = 0.5, 2
@@ -177,33 +179,21 @@ end
 -- The column's width in its own units: the 260 of the client's ObjectiveTrackerContainer header template, so a Forever
 -- section reads at the width its template was drawn for.
 local WIDTH = 260
--- The column starts at its pin, so it never shows anywhere else before the store's anchor below (#795).
-host:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPLEFT", 0, 0)
 -- The column is a child of UIParent, so its scale is only the player's own tracker scale.
 local function MatchScale()
 	-- Saved variables, and with them the user's scale, are not ready while the files load.
 	host:SetScale(ready and Settings().scale or 1)
 end
-MatchScale()
-host:SetWidth(WIDTH)
-host:SetHeight(1)
-host:SetMovable(true)
-host:SetClampedToScreen(true)
 -- A header drag moves the column, and the Lock switch stops it; both live in UI/TrackerLock.lua, which the TOC loads
 -- before this one.
-local Drag = ns.TrackerLock.Drag(host, api)
+local Drag
 -- The optional backdrop spans the whole private column, so every Forever section sits on it at once. It is one
 -- texture on the host rather than chrome each addon draws, and it uses the game's own tooltip background art, tinted
 -- the way the tooltip tints it. Off is simply opacity 0; drawing it only changes a texture, never a frame, so the
 -- slider is safe to move in combat.
 local BACKDROP_ATLAS = "Tooltip-NineSlice-Center"
 local BACKDROP_INSET = 6
-local backdrop = host:CreateTexture(nil, "BACKGROUND")
--- art-ok: the tooltip's own centre fill, a tiling texture stretched to the column by design
-backdrop:SetAtlas(BACKDROP_ATLAS)
-backdrop:SetPoint("TOPLEFT", host, "TOPLEFT", -BACKDROP_INSET, BACKDROP_INSET)
-backdrop:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", BACKDROP_INSET, -BACKDROP_INSET)
-backdrop:Hide()
+local backdrop
 
 local function BackdropTint()
 	local color = rawget(_G, "TOOLTIP_DEFAULT_BACKGROUND_COLOR")
@@ -236,7 +226,7 @@ local function IsLocked()
 end
 local modules, queued = {}, false
 local pendingAttachments = {}
-local pools = CreateFramePoolCollection()
+local pools
 
 local function Acquire(parent, template)
 	local info = C_XMLUtil.GetTemplateInfo(template)
@@ -1052,7 +1042,9 @@ local function Layout()
 	Place(settings)
 end
 
-function host.MarkDirty(_)
+-- The column's own methods, given to the frame when Start makes it.
+local column = {}
+function column.MarkDirty(_)
 	-- Combat queues nothing: the column holds its last layout until PLAYER_REGEN_ENABLED runs the deferred pass.
 	-- The protected quest item buttons, and every ancestor that moves with them, stay where the player last saw them.
 	if ready and not queued and not InCombatLockdown() then
@@ -1061,10 +1053,10 @@ function host.MarkDirty(_)
 	end
 end
 -- The column has no collapse of its own; each section folds itself.
-function host.IsCollapsed(_)
+function column.IsCollapsed(_)
 	return false
 end
-function host:ForceExpand()
+function column:ForceExpand()
 	self:MarkDirty()
 end
 
@@ -1480,30 +1472,32 @@ function api.IsAttached(module)
 end
 -- Combat ending attaches the sections combat held back. Combat starting freezes every section's scrollbar, so
 -- each secure item button stays beside its quest.
-host:RegisterEvent("PLAYER_REGEN_ENABLED")
-host:RegisterEvent("PLAYER_REGEN_DISABLED")
-host:RegisterEvent("DISPLAY_SIZE_CHANGED")
-host:RegisterEvent("UI_SCALE_CHANGED")
--- A pinned column hangs off the game's tracker, which Edit Mode places after login and the player can move, so each
--- layout Edit Mode applies lays the column out again where it now has room. No hook touches the tracker's own methods.
-host:RegisterEvent("EDIT_MODE_LAYOUTS_UPDATED")
-host:SetScript("OnEvent", function(_, event)
-	if event == "PLAYER_REGEN_ENABLED" then
-		for module, attachment in pairs(pendingAttachments) do
-			pendingAttachments[module] = nil
-			api.Attach(module, attachment.show, attachment.contract)
-		end
-	end
-	if event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
-		local frozen = event == "PLAYER_REGEN_DISABLED"
-		for _, module in ipairs(modules) do
-			if module.SetScrollFrozen then
-				module:SetScrollFrozen(frozen)
+local function Listen()
+	host:RegisterEvent("PLAYER_REGEN_ENABLED")
+	host:RegisterEvent("PLAYER_REGEN_DISABLED")
+	host:RegisterEvent("DISPLAY_SIZE_CHANGED")
+	host:RegisterEvent("UI_SCALE_CHANGED")
+	-- A pinned column hangs off the game's tracker, which Edit Mode places after login and the player can move, so each
+	-- layout Edit Mode applies lays the column out again where it now has room. No hook touches the tracker's own methods.
+	host:RegisterEvent("EDIT_MODE_LAYOUTS_UPDATED")
+	host:SetScript("OnEvent", function(_, event)
+		if event == "PLAYER_REGEN_ENABLED" then
+			for module, attachment in pairs(pendingAttachments) do
+				pendingAttachments[module] = nil
+				api.Attach(module, attachment.show, attachment.contract)
 			end
 		end
-	end
-	host:MarkDirty()
-end)
+		if event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
+			local frozen = event == "PLAYER_REGEN_DISABLED"
+			for _, module in ipairs(modules) do
+				if module.SetScrollFrozen then
+					module:SetScrollFrozen(frozen)
+				end
+			end
+		end
+		host:MarkDirty()
+	end)
+end
 -- A developer diagnostic for the tracker stack (/agf tracker). The combat overlap is otherwise invisible headlessly: it
 -- prints both frames' anchors, heights and who each is anchored to.
 ---@return string
@@ -1560,10 +1554,32 @@ function ns.AfterWorldEvents(callback)
 	end
 end
 
-ns.AfterWorldEvents(function()
-	ready = true
-	host:MarkDirty()
-end)
-
-ForeverTrackerHost = api -- taint-ok: addon-owned companion tracker registry
 ns.TrackerHost = api
+
+ns.AtStart(function()
+	host = CreateFrame("Frame", "ForeverTrackerCompanion", UIParent)
+	for key, method in pairs(column) do
+		host[key] = method
+	end
+	-- The column starts at its pin, so it never shows anywhere else before the store's anchor (#795).
+	host:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPLEFT", 0, 0)
+	MatchScale()
+	host:SetWidth(WIDTH)
+	host:SetHeight(1)
+	host:SetMovable(true)
+	host:SetClampedToScreen(true)
+	Drag = ns.TrackerLock.Drag(host, api)
+	backdrop = host:CreateTexture(nil, "BACKGROUND")
+	-- art-ok: the tooltip's own centre fill, a tiling texture stretched to the column by design
+	backdrop:SetAtlas(BACKDROP_ATLAS)
+	backdrop:SetPoint("TOPLEFT", host, "TOPLEFT", -BACKDROP_INSET, BACKDROP_INSET)
+	backdrop:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", BACKDROP_INSET, -BACKDROP_INSET)
+	backdrop:Hide()
+	pools = CreateFramePoolCollection()
+	Listen()
+	ns.AfterWorldEvents(function()
+		ready = true
+		host:MarkDirty()
+	end)
+	ForeverTrackerHost = api -- taint-ok: addon-owned companion tracker registry
+end)

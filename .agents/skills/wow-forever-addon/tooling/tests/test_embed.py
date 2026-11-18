@@ -65,6 +65,23 @@ class EmbedTest(unittest.TestCase):
         )
         subprocess.run(["luajit", "-e", script], check=True)
 
+    @unittest.skipUnless(shutil.which("luajit"), "luajit not on PATH")
+    def test_the_addon_files_wait_for_a_core_that_started(self):
+        self.run_embed()
+        run = self.root / embed.HOST_RUN
+        script = (
+            "local ready = {} "
+            "ForeverCoreLoader = { OnReady = function(callback) ready[#ready + 1] = callback end } "
+            "local ran = 0 "
+            "local host = { ForeverCoreHostChunks = { function() ran = ran + 1 end } } "
+            f"assert(loadfile({str(run)!r}))('DemoForever', host) "
+            "ready[1](nil, nil) "
+            "assert(ran == 0, 'no addon file runs when ForeverCore did not start') "
+            "ready[1]({}, { mode = 'elected' }) "
+            "assert(ran == 1, 'the addon files run once ForeverCore started')"
+        )
+        subprocess.run(["luajit", "-e", script], check=True)
+
     @unittest.skipUnless(shutil.which("git"), "git not on PATH")
     def test_in_a_git_checkout_the_new_files_are_tracked_for_the_packager(self):
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)

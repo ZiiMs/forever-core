@@ -123,9 +123,13 @@ def plan(
     if TEMPLATE not in templates:
         raise ValueError("canonical tracker template missing")
     # A host first loaded after another copy is running (load on demand) joins that copy: the loader records its own
-    # copy and store offer as "late", which is not a packaging error. Any other refusal still stops the load.
+    # copy as "late", which is not a packaging error, and keeps its store offer (a revision 1 registry refuses
+    # that as "late" too). Any other refusal stops the load.
+    # Every wrapped Lua file plus End.lua's template definition: Seal refuses a package missing any of them.
+    chunks = sum(1 for name in graph if name.endswith(".lua") and name != "Core/Loader.lua") + 1
     output[prefix + "Begin.lua"] = (
-        f'local addon, host = ...\nhost.ForeverCoreCopy = ForeverCoreLoader.Begin(addon, {build}, "{identity}")\n'
+        "local addon, host = ...\n"
+        f'host.ForeverCoreCopy = ForeverCoreLoader.Begin(addon, {build}, "{identity}", {chunks})\n'
         f'local offered, reason = ForeverCoreLoader.OfferStore(addon, "{saved_variable}")\n'
         'assert(offered or reason == "late", reason)\n'
     ).encode()

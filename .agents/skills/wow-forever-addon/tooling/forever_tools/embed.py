@@ -94,7 +94,12 @@ local function Registered(event)
 end
 
 local inline = true
-ForeverCoreLoader.OnReady(function()
+ForeverCoreLoader.OnReady(function(core)
+	-- No core means activation failed, and the loader already reports why once. The deferred files need core, so none
+	-- of them runs against its absence.
+	if core == nil then
+		return
+	end
 	local before = {}
 	if not inline then
 		for _, event in ipairs(REPLAYED) do
