@@ -1898,6 +1898,23 @@ class BuildDevTest(unittest.TestCase):
             fc.embed_core(staging, core_root=self.workspace)
         self.assertEqual(archived, ["abc1234", "v1.15.0"])
 
+    def test_embed_core_uses_the_candidate_cores_tooling_for_a_core_ref(self):
+        staging = self.workspace / "staging"
+        (staging / "tools/forever_tools").mkdir(parents=True)
+        (staging / "tools/forever_tools/embed.py").write_text("# the build's own\n")
+        (staging / "tools/forever-core.txt").write_text("v1.15.0\n")
+
+        def unpack(_archive, core):
+            (core / fc.CORE_TOOLING).mkdir(parents=True)
+            (core / fc.CORE_TOOLING / "embed.py").write_text("# the candidate's\n")
+
+        with (
+            mock.patch.object(fc.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+            mock.patch.object(fc, "unpack", side_effect=unpack),
+        ):
+            fc.embed_core(staging, core_root=self.workspace, core_ref="abc1234")
+        self.assertEqual((staging / "tools/forever_tools/embed.py").read_text(), "# the candidate's\n")
+
     def test_build_dev_cli_embeds_a_resolved_core_ref(self):
         (self.repo / "Core/Core.lua").write_text("-- after the release\n")
         self.git("-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qam", "two")

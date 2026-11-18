@@ -1430,12 +1430,18 @@ def unpack(archive: Path, destination: Path) -> None:
             tree.extractall(destination)
 
 
+# Where the core checkout keeps the tooling each consumer vendors as tools/forever_tools.
+CORE_TOOLING = Path(".agents/skills/wow-forever-addon/tooling/forever_tools")
+
+
 def embed_core(staging: Path, core_root: Path | None = None, core_ref: str | None = None) -> None:
     """Run the build's own `forever_tools.embed` when its TOC opts in, as the consumer's release does.
 
     The core it embeds is a git archive of the `forever-core` checkout at the tag `tools/forever-core.txt` pins, so the
     dev build carries the same `Libs/ForeverCore/` bytes the release zip will. `core_ref` embeds that core commit
-    instead, to test an unreleased core candidate inside a consumer; the build number still comes from the pin.
+    instead, to test an unreleased core candidate inside a consumer; the build number still comes from the pin. The
+    candidate's own vendored tooling replaces the build's first, as the consumer's tooling sync will, so its embed step
+    and generated files are the candidate's too.
     """
     tool = staging / "tools" / "forever_tools" / "embed.py"
     pin = staging / "tools" / "forever-core.txt"
@@ -1468,6 +1474,9 @@ def embed_core(staging: Path, core_root: Path | None = None, core_ref: str | Non
                 f"git archive of ForeverCore {core_ref or pin.read_text().strip()} failed: {detail.strip()}"
             ) from None
         unpack(archive, core)
+        tooling = core / CORE_TOOLING
+        if core_ref and tooling.is_dir():
+            shutil.copytree(tooling, staging / "tools" / "forever_tools", dirs_exist_ok=True)
         done = subprocess.run(
             [sys.executable, "-m", "tools.forever_tools.embed", "--core", str(core), str(staging)],
             cwd=staging,
