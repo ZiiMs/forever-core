@@ -380,6 +380,9 @@ logic out of a general rule.
 | `.agents/skills/wow-forever-addon/SKILL.md` | the shared standards pack (`WFA-*`), UI look, icon, docs, CI and release baseline |
 | `.agents/skills/wow-addon-publish/SKILL.md` | publishing to CurseForge and GitHub, or cutting a release |
 | `.agents/skills/wow-retail-ui-style/SKILL.md` | drawing or auditing addon windows, frames and widgets |
+| `.agents/skills/wow-mock-screenshots/SKILL.md` | rendering README and store screenshots with `tools/wowmock` |
+| `.agents/skills/wow-visual-audit/SKILL.md` | gating a rendered scene's layout, or judging a screenshot by eye |
+| `.agents/skills/foreverauras/SKILL.md` | building or decoding a ForeverAuras (WeakAuras) import string |
 
 Each addon declares `wow-forever-addon` under `## Standards` in its `AGENTS.md`, pinned to this repo. The pack's
 tooling (`tooling/forever_tools`, `tooling/forever_sim`) is produced here and vendored byte for byte into the
