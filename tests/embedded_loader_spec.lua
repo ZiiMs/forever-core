@@ -1166,6 +1166,34 @@ for _, case in ipairs({
 	equal(kinds[1], "supervise", case.name .. ": the trace says the registry is supervised")
 end
 
+-- The notice reads in the client's language, every shipped locale naming both versions; any other locale gets English.
+do
+	local texts = {}
+	for _, locale in ipairs({ "enUS", "deDE", "esES", "esMX", "frFR", "koKR", "ptBR", "ruRU", "zhCN", "zhTW", "itIT" }) do
+		local sess = newSession()
+		sess.env.GetLocale = function()
+			return locale
+		end
+		sess.env.C_AddOns = {
+			GetAddOnMetadata = function()
+				return "v1.15.0"
+			end,
+		}
+		sess.env.ForeverCore = legacy
+		sess:Candidate("Embedded", build(1, 16, 0))
+		local text = sess.loader.Warning() or ""
+		check(
+			text:find("v1.15.0", 1, true) and text:find("1.16.0", 1, true),
+			locale .. ": the notice names both versions"
+		)
+		texts[locale] = text
+	end
+	for _, locale in ipairs({ "deDE", "esES", "esMX", "frFR", "koKR", "ptBR", "ruRU", "zhCN", "zhTW" }) do
+		check(texts[locale] ~= texts.enUS, locale .. ": the notice is translated")
+	end
+	equal(texts.itIT, texts.enUS, "a locale with no line falls back to English")
+end
+
 -- A standalone at the same build as the newest embedded copy is not outdated: no notice, no warning, in either
 -- registry.
 for _, older in ipairs({ false, "tests/fixtures/loader_revision1.lua" }) do

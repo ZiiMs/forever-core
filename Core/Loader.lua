@@ -36,12 +36,33 @@ local function InstalledVersion()
 	end
 end
 
+-- The notice in every shipped locale (WFA-34). The loader runs before any runtime's Locales, so it carries its own
+-- line. The first %s is the installed standalone's version, the second the newest embedded one.
+local OUTDATED = {
+	enUS = "ForeverCore %s is older than the ForeverCore %s your addons include. Update or disable ForeverCore.",
+	deDE = "ForeverCore %s ist älter als das ForeverCore %s, das deine Addons enthalten. "
+		.. "Aktualisiere oder deaktiviere ForeverCore.", -- mt
+	esES = "ForeverCore %s es más antiguo que el ForeverCore %s que incluyen tus addons. "
+		.. "Actualiza o desactiva ForeverCore.", -- mt
+	esMX = "ForeverCore %s es más antiguo que el ForeverCore %s que incluyen tus addons. "
+		.. "Actualiza o desactiva ForeverCore.", -- mt
+	frFR = "ForeverCore %s est plus ancien que le ForeverCore %s inclus dans vos addons. "
+		.. "Mettez à jour ou désactivez ForeverCore.", -- mt
+	koKR = "ForeverCore %s 버전이 애드온에 포함된 ForeverCore %s보다 오래되었습니다. "
+		.. "ForeverCore를 업데이트하거나 비활성화하세요.", -- mt
+	ptBR = "O ForeverCore %s é mais antigo que o ForeverCore %s incluído nos seus addons. "
+		.. "Atualize ou desative o ForeverCore.", -- mt
+	ruRU = "ForeverCore %s старее, чем ForeverCore %s в ваших аддонах. "
+		.. "Обновите или отключите ForeverCore.", -- mt
+	zhCN = "ForeverCore %s 比你的插件所含的 ForeverCore %s 旧。请更新或停用 ForeverCore。", -- mt
+	zhTW = "ForeverCore %s 比你的插件所含的 ForeverCore %s 舊。請更新或停用 ForeverCore。", -- mt
+}
+
 local function OutdatedText(version, newest)
-	return "ForeverCore "
-		.. tostring(version or "")
-		.. " is older than the ForeverCore "
-		.. BuildVersion(newest)
-		.. " your addons include. Update or disable ForeverCore."
+	local getLocale = rawget(_G, "GetLocale")
+	local locale = type(getLocale) == "function" and getLocale() or "enUS"
+	local text = OUTDATED[locale] or OUTDATED.enUS
+	return text:format(tostring(version or ""), BuildVersion(newest))
 end
 
 -- The outdated-standalone notice, on screen on the next frame. Never a chat line. NoticeOnce decides whether it shows.
