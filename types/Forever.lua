@@ -181,6 +181,7 @@
 
 ---@class ForeverCoreLoaderSelection
 ---@field mode "elected"|"standalone"|"legacy"
+---@field version? string the installed standalone's Version, in legacy mode
 ---@field build? number
 ---@field folder? string
 ---@field root? string
@@ -214,6 +215,9 @@
 ---@field CallbackError fun(): string?
 ---@field LoginError fun(): string?
 ---@field Rejections fun(): { folder: string, reason: string }[]
+---@field Trace fun(): { kind: string, folder?: string, detail?: string, time?: number }[]
+---@field Seen fun(event: "PLAYER_ENTERING_WORLD"|"VARIABLES_LOADED"): boolean
+---@field WorldEntry fun(): boolean?, boolean?
 
 ---@class ForeverCoreStoreConflictValue
 ---@field present boolean
@@ -241,6 +245,7 @@ ForeverCoreLoader = nil
 ForeverCore = nil
 
 ---@class ForeverTrackerNamespace
+---@field DebugCaptureCatchUp? fun()
 ---@field ReportRefusal fun(reason: any)
 ---@field RegisterOpener fun(addon: string, callback: ForeverCoreOpenCallback, secure?: boolean)
 ---@field folder? string
