@@ -617,8 +617,8 @@ check(coreNs.TrackerHostForeign == true, "ForeverCore knows the column is not it
 check(rawequal(env.ForeverTrackerHost, oldHost), "ForeverCore leaves the existing registry in place")
 equal(CompanionFrames(), 1, "vendored first: ForeverCore builds no second column")
 check(type(coreNs.AfterWorldEvents) == "function", "with a foreign column core still has its world-event wait")
-local created, createError = pcall(coreNs.TrackerSection.Create, "AdoptSpecSection", {}, {})
-check(created, "so core's tracker sections can still be created: " .. tostring(createError))
+local sectionMade, createError = pcall(coreNs.TrackerSection.Create, "AdoptSpecSection", {}, {})
+check(sectionMade, "so core's tracker sections can still be created: " .. tostring(createError))
 for _, name in ipairs({
 	"Attach",
 	"Debug",
