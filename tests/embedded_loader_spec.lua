@@ -32,7 +32,7 @@ end
 -- A fresh Lua environment is one client session: one loading frame list, one loader global and one facade. Loading
 -- the loader file twice is what two embedded copies do when they are the first and the second copy in the same
 -- session; the second must reuse the first copy's registry.
-local function newSession(older)
+local function newSession(older, setup)
 	local frames = {}
 	local env = setmetatable({}, { __index = _G })
 	env._G = env
@@ -61,6 +61,9 @@ local function newSession(older)
 		local chunk = assert(loadfile(path or "Core/Loader.lua"), path or "Core/Loader.lua")
 		setfenv(chunk, env)
 		chunk("ForeverCore", {})
+	end
+	if setup then
+		setup(env)
 	end
 	if older then
 		load(older)
@@ -1248,6 +1251,72 @@ do
 	check((sess.loader.Warning() or ""):find("Update or disable ForeverCore", 1, true), "and Warning reports it")
 	equal(supervisedStore.outdatedNoticeVersion, "v1.15.0", "the version it was shown for is remembered")
 	equal(#sess.boots, 0, "still no second runtime")
+end
+
+-- A host first loaded after login with an older standalone already adopted gets the notice without waiting for a
+-- loading screen.
+do
+	local count = 0
+	local sess = newSession(nil, function(env)
+		env.IsLoggedIn = function()
+			return true
+		end
+		env.StaticPopupDialogs = {}
+		env.StaticPopup_Show = function()
+			count = count + 1
+		end
+		env.C_AddOns = {
+			GetAddOnMetadata = function()
+				return "v1.15.0"
+			end,
+		}
+	end)
+	sess.env.ForeverCore = legacy
+	sess:Candidate("LoadedLate", build(1, 16, 0))
+	sess.Tick()
+	equal(count, 1, "a host loaded after login shows the notice on the next frame")
+end
+
+-- A revision 1 registry whose hosts both first load after login hears neither event; the newer copy settles it on the
+-- next frame instead of leaving it silent.
+do
+	local sess = newSession("tests/fixtures/loader_revision1.lua", function(env)
+		env.IsLoggedIn = function()
+			return true
+		end
+	end)
+	sess:Candidate("Embedded", build(1, 16, 0))
+	check(sess.loader.Selected() == nil and sess.loader.Error() == nil, "nothing has run inside the file load")
+	sess.Tick()
+	equal(sess.loader.Selected() and sess.loader.Selected().folder, "Embedded", "the copy activates on the next frame")
+	equal(#sess.logins, 1, "with one Login")
+	sess.Tick()
+	equal(#sess.boots, 1, "once")
+end
+
+-- A copy that began but never sealed is named in the report, and never counts as the newer build a notice names.
+do
+	local sess = newSession()
+	sess.loader.Begin("HalfLoaded", build(1, 20, 0))
+	sess:Candidate("Whole", build(1, 16, 0))
+	sess.Fire("PLAYER_LOGIN")
+	equal(sess.loader.Selected() and sess.loader.Selected().folder, "Whole", "the sealed copy runs")
+	local reasons = {}
+	for _, entry in ipairs(sess.loader.Rejections()) do
+		reasons[entry.folder .. ":" .. entry.reason] = true
+	end
+	check(reasons["HalfLoaded:unsealed"], "the unsealed copy is reported")
+
+	local legacySess = newSession()
+	legacySess.env.C_AddOns = {
+		GetAddOnMetadata = function()
+			return "v1.16.0"
+		end,
+	}
+	legacySess.env.ForeverCore = legacy
+	legacySess:Candidate("Current", build(1, 16, 0))
+	legacySess.loader.Begin("HalfNewer", build(1, 20, 0))
+	check(legacySess.loader.Warning() == nil, "an unsealed newer copy does not make the standalone outdated")
 end
 
 print(("embedded_loader_spec: %d checks passed"):format(checks))

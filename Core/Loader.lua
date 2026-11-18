@@ -107,6 +107,7 @@ end
 -- activates the registry at PLAYER_ENTERING_WORLD when revision 1 missed PLAYER_LOGIN. Activation stays the old
 -- loader's own: its Activate is idempotent, and the runtime's Login guards itself (ns.loginDone). When revision 1
 -- adopted an older standalone over newer registered copies, the world entry shows the outdated notice once.
+-- Revision 1 ignores Begin's chunk count, so it cannot refuse a truncated package; this copy cannot add that.
 local function Supervise(old)
 	if old.revision ~= nil or rawget(old, "supervised") ~= nil or type(CreateFrame) ~= "function" then
 		return
@@ -134,19 +135,10 @@ local function Supervise(old)
 			end
 			return out
 		end
-	local frame = CreateFrame("Frame")
-	frame:RegisterEvent("PLAYER_ENTERING_WORLD")
-	frame:RegisterEvent("VARIABLES_LOADED")
-	frame:SetScript("OnEvent", function(_, event, ...)
-		seen[event] = true
-		frame:UnregisterEvent(event)
-		if event ~= "PLAYER_ENTERING_WORLD" then
-			return
-		end
-		entry = { ... }
+	-- Activates a silent registry, then shows the outdated notice when revision 1 adopted an older standalone.
+	local function Settle(reason)
 		if old.Selected() == nil and old.Error() == nil then
-			-- The world is entered, so every startup host's files and SavedVariables are in.
-			Note("activate", "PLAYER_ENTERING_WORLD without PLAYER_LOGIN (revision 1 registry)")
+			Note("activate", reason)
 			old.Activate()
 			local namespace = old.Namespace()
 			if namespace ~= nil and type(namespace.Login) == "function" then
@@ -159,21 +151,46 @@ local function Supervise(old)
 		end
 		local newest
 		for _, copy in ipairs(old.Candidates()) do
-			if copy.rejected == nil and (newest == nil or copy.build > newest) then
+			if copy.sealed and copy.rejected == nil and (newest == nil or copy.build > newest) then
 				newest = copy.build
 			end
 		end
 		local installed = VersionBuild(InstalledVersion())
-		if newest ~= nil and (installed == nil or installed < newest) then
+		if newest ~= nil and (installed == nil or installed < newest) and old.Warning == nil then
 			local text = OutdatedText(InstalledVersion(), newest)
-			old.Warning = old.Warning or function()
+			old.Warning = function()
 				return text
 			end
 			Note("legacy", "older than embedded " .. BuildVersion(newest))
 			Note("notice", NoticeOnce(InstalledVersion(), text) and "shown" or "already shown for this version")
 		end
+	end
+	local frame = CreateFrame("Frame")
+	frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+	frame:RegisterEvent("VARIABLES_LOADED")
+	frame:SetScript("OnEvent", function(_, event, ...)
+		seen[event] = true
+		frame:UnregisterEvent(event)
+		if event == "PLAYER_ENTERING_WORLD" then
+			entry = { ... }
+			-- The world is entered, so every startup host's files and SavedVariables are in.
+			Settle("PLAYER_ENTERING_WORLD without PLAYER_LOGIN (revision 1 registry)")
+		end
 	end)
 	Note("supervise", "revision 1 registry")
+	-- Revision 1 listens only for PLAYER_LOGIN. When this copy first loads after login (both hosts loaded on demand or
+	-- by hand after the world entry), neither event is coming, so the registry settles on the next frame, after this
+	-- host's files have registered and sealed.
+	local isLoggedIn = rawget(_G, "IsLoggedIn")
+	if type(isLoggedIn) == "function" and isLoggedIn() == true then
+		seen.PLAYER_ENTERING_WORLD, seen.VARIABLES_LOADED = true, true
+		local timer = rawget(_G, "C_Timer")
+		if type(timer) == "table" and type(timer.After) == "function" then
+			timer.After(0, function()
+				Settle("after login (revision 1 registry)")
+			end)
+		end
+	end
 end
 
 local existing = rawget(_G, "ForeverCoreLoader")
@@ -470,6 +487,9 @@ local function EnsureLoginFrame()
 	frame:SetScript("OnEvent", OnEvent)
 end
 
+-- Defined with the legacy helpers below; Seal reports a newly sealed copy to it.
+local CheckLegacyAge
+
 local methods = {}
 
 -- One wrapped file. Defining is registration only; the chunk runs at activation, in the order the TOC listed it.
@@ -508,6 +528,7 @@ function methods:Seal()
 	end
 	self.sealed = true
 	Trace("seal", self.folder, #self.chunks)
+	CheckLegacyAge()
 	if not state.activated and LoggedIn() then
 		ScheduleActivation("sealed after login", self.folder)
 	end
@@ -539,14 +560,14 @@ end
 -- An adopted legacy table that is older than a registered copy still serves the session, since a second runtime cannot
 -- start beside it, and the player is told which install to update. Older means a lower build than the newest
 -- registered copy; a standalone whose version cannot be read is treated as older, since it has no loader schema.
-local function CheckLegacyAge()
+function CheckLegacyAge()
 	local selection = state.selection
 	if selection == nil or selection.mode ~= "legacy" then
 		return
 	end
 	local newest
 	for _, copy in ipairs(state.candidates) do
-		if copy.rejected == nil and (newest == nil or copy.build > newest) then
+		if copy.sealed and copy.rejected == nil and (newest == nil or copy.build > newest) then
 			newest = copy.build
 		end
 	end
@@ -727,6 +748,14 @@ function Loader.Activate()
 		RunReady()
 		return legacy
 	end
+	-- A copy that began but never sealed is a package whose files did not all load. It cannot run, so the report
+	-- names it rather than leaving it out silently.
+	for _, copy in ipairs(state.candidates) do
+		if not copy.sealed and copy.rejected == nil and not copy.unsealedReported then
+			copy.unsealedReported = true
+			Record(copy.folder, "unsealed")
+		end
+	end
 	local chosen = Elect()
 	if chosen == nil then
 		if state.conflict ~= nil then
@@ -806,7 +835,6 @@ function Loader.Begin(folder, build, digest, chunks)
 	state.byFolder[folder] = copy
 	state.candidates[#state.candidates + 1] = copy
 	Trace("begin", folder, build)
-	CheckLegacyAge()
 	EnsureLoginFrame()
 	return copy
 end

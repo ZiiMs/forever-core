@@ -82,6 +82,27 @@ local function OfferLegacy(module)
 	return false
 end
 
+-- Runs `callback` once the world is entered and saved variables are loaded. Defined before the foreign-column branch
+-- below, since core's tracker sections wait on it with either column. A copy the loader boots after one of those
+-- events has fired (Loader.Seen) waits only for the rest: EventUtil.ContinueAfterAllEvents never completes for an
+-- event that came before it was registered. The unwrapped standalone loads before both and waits for both.
+---@param callback fun()
+function ns.AfterWorldEvents(callback)
+	local loader = rawget(_G, "ForeverCoreLoader")
+	local seen = type(loader) == "table" and type(loader.Seen) == "function" and loader.Seen or nil
+	local pending = {}
+	for _, event in ipairs({ "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED" }) do
+		if not (seen and seen(event)) then
+			pending[#pending + 1] = event
+		end
+	end
+	if #pending == 0 then
+		callback()
+	else
+		EventUtil.ContinueAfterAllEvents(callback, unpack(pending))
+	end
+end
+
 -- A store build that still vendors UI/TrackerHost.lua can load before ForeverCore (Adventure Guide, Commissions and
 -- Field Guide load before it alphabetically). That copy registers the one companion column in ForeverTrackerHost and
 -- reuses whatever is already there, so adopt the existing column instead of drawing a second one over it: every call
@@ -1537,26 +1558,6 @@ function api.Debug()
 		geometry(host),
 		UIParent:GetEffectiveScale()
 	)
-end
-
--- Runs `callback` once the world is entered and saved variables are loaded. A copy the loader boots after one of those
--- events has fired (Loader.Seen) waits only for the rest: EventUtil.ContinueAfterAllEvents never completes for an
--- event that came before it was registered. The unwrapped standalone loads before both and waits for both.
----@param callback fun()
-function ns.AfterWorldEvents(callback)
-	local loader = rawget(_G, "ForeverCoreLoader")
-	local seen = type(loader) == "table" and type(loader.Seen) == "function" and loader.Seen or nil
-	local pending = {}
-	for _, event in ipairs({ "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED" }) do
-		if not (seen and seen(event)) then
-			pending[#pending + 1] = event
-		end
-	end
-	if #pending == 0 then
-		callback()
-	else
-		EventUtil.ContinueAfterAllEvents(callback, unpack(pending))
-	end
 end
 
 ns.TrackerHost = api
