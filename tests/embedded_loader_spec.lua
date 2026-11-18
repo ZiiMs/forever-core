@@ -423,7 +423,12 @@ check(session.loader.Error() == nil, "and the boot stays clean")
 
 -- Legacy 1.8 is adopted, never neutralised and never run beside: its table stays the identity consumers already see.
 session = newSession()
-local legacy = { API = 1, Register = function() end, name = "ForeverCore" }
+local legacy = {
+	API = 2,
+	Register = function() end,
+	TrackerLine = { SetInteractive = function() end },
+	name = "ForeverCore",
+}
 session.env.ForeverCore = legacy
 session:Candidate("Embedded", build(1, 9, 0))
 session.Fire("PLAYER_LOGIN")
@@ -479,11 +484,11 @@ check(standalone.sealed, "the standalone copy seals")
 check(session.loader.Selected() == nil, "Seal alone does not activate the standalone")
 equal(#session.boots, 0, "no chunk runs before login")
 local frame = session.frames[1]
-check(frame.events.ADDON_LOADED == nil, "the loader needs no ADDON_LOADED activation")
+-- ADDON_LOADED before login never activates: it is only the late-host path (below).
 check(frame.events.PLAYER_LOGIN == true, "the loading frame listens for PLAYER_LOGIN")
 session.Fire("ADDON_LOADED", "SomeOtherAddon")
 session.Fire("ADDON_LOADED", "ForeverCore")
-check(session.loader.Selected() == nil, "own ADDON_LOADED does not activate it")
+check(session.loader.Selected() == nil, "own ADDON_LOADED before login does not activate it")
 equal(#session.boots, 0, "and runs no chunk")
 local later = session:Candidate("EmbeddedLater", build(1, 10, 0))
 check(later.rejected == nil, "a later higher embedded copy remains eligible")
@@ -728,5 +733,161 @@ check(candidates[1].sealed, "complete candidate is sealed")
 equal(candidates[2].rejected, "empty", "rejected candidate retains its reason")
 candidates[1].build = build(9, 0, 0)
 equal(session.loader.Candidates()[1].build, build(1, 9, 0), "diagnostic snapshots do not mutate candidates")
+
+-- Every way a sess reaches activation, for every outcome: a registered copy is never left silent. After the event,
+-- exactly one of Selected and Error answers, the runtime boots at most once and its Login runs at most once, and the
+-- trace names the event that activated it. This is the guard for the class behind #837: a copy that registered and
+-- sealed but was never activated, with Selected and Error both nil.
+local paths = {
+	{
+		name = "PLAYER_LOGIN",
+		run = function(sess)
+			sess.Fire("PLAYER_LOGIN")
+		end,
+	},
+	{
+		name = "PLAYER_ENTERING_WORLD without PLAYER_LOGIN",
+		run = function(sess)
+			sess.Fire("ADDON_LOADED", "Host")
+			sess.Fire("PLAYER_ENTERING_WORLD")
+		end,
+	},
+	{
+		name = "ADDON_LOADED after login",
+		loggedIn = true,
+		run = function(sess)
+			sess.Fire("ADDON_LOADED", "SomeOtherAddon")
+			check(sess.loader.Selected() == nil and sess.loader.Error() == nil, "another addon's load waits")
+			sess.Fire("ADDON_LOADED", "Host")
+		end,
+	},
+}
+local outcomes = {
+	{ name = "a valid copy", expect = "elected" },
+	{
+		name = "a copy whose Start fails",
+		chunk = function(ns)
+			ns.Start = function()
+				error("start failed", 0)
+			end
+		end,
+		expect = "error",
+	},
+	{
+		name = "a copy with an incomplete facade",
+		chunk = function(_, core)
+			core.Register = nil
+		end,
+		expect = "error",
+		noStart = true,
+	},
+	{ name = "two conflicting copies", conflict = true, expect = "error" },
+}
+for _, path in ipairs(paths) do
+	for _, outcome in ipairs(outcomes) do
+		local label = path.name .. " / " .. outcome.name
+		local sess = newSession()
+		if path.loggedIn then
+			sess.env.IsLoggedIn = function()
+				return true
+			end
+		end
+		sess:Candidate("Host", build(1, 9, 0), { digest = "a", chunk = outcome.chunk })
+		if outcome.conflict then
+			sess:Candidate("Other", build(1, 9, 0), { digest = "b" })
+		end
+		equal(#sess.boots, 0, label .. ": nothing runs before activation")
+		path.run(sess)
+		local picked, err = sess.loader.Selected(), sess.loader.Error()
+		check((picked ~= nil) ~= (err ~= nil), label .. ": exactly one of Selected and Error answers")
+		if outcome.expect == "elected" then
+			equal(picked and picked.folder, "Host", label .. ": the copy is elected")
+			equal(#sess.logins, 1, label .. ": its Login runs once")
+		else
+			check(err ~= nil, label .. ": the failure is reported")
+			equal(#sess.logins, 0, label .. ": no Login runs after a failed boot")
+		end
+		if outcome.noStart then
+			equal(#sess.starts, 0, label .. ": Start never runs for a copy that fails validation")
+		end
+		local boots, logins = #sess.boots, #sess.logins
+		sess.Fire("PLAYER_LOGIN")
+		sess.Fire("PLAYER_ENTERING_WORLD")
+		sess.Fire("ADDON_LOADED", "Host")
+		equal(#sess.boots, boots, label .. ": later loading events boot nothing more")
+		equal(#sess.logins, logins, label .. ": and run no second Login")
+		local activations = {}
+		for _, entry in ipairs(sess.loader.Trace()) do
+			if entry.kind == "activate" then
+				activations[#activations + 1] = entry.detail
+			end
+		end
+		equal(#activations, 1, label .. ": the trace records one activation")
+		equal(activations[1], path.name, label .. ": named by the event that caused it")
+		for _, event in ipairs({ "PLAYER_LOGIN", "ADDON_LOADED", "PLAYER_ENTERING_WORLD" }) do
+			check(not sess.frames[1].events[event], label .. ": the loading frame drops " .. event)
+		end
+	end
+end
+
+-- A normal sess's trace, in order: each copy's begin and seal, then the activation and the boot result.
+do
+	local sess = newSession()
+	sess:Candidate("AddonA", build(1, 7, 0))
+	sess:Candidate("AddonB", build(1, 8, 0))
+	sess.Fire("PLAYER_LOGIN")
+	local kinds = {}
+	for _, entry in ipairs(sess.loader.Trace()) do
+		kinds[#kinds + 1] = entry.kind .. ":" .. tostring(entry.folder)
+	end
+	equal(
+		table.concat(kinds, " "),
+		"begin:AddonA seal:AddonA begin:AddonB seal:AddonB activate:nil boot:AddonB",
+		"the trace lists the sess in order"
+	)
+	local copy = sess.loader.Trace()
+	copy[1].kind = "changed"
+	equal(sess.loader.Trace()[1].kind, "begin", "the trace is a copy")
+end
+
+-- A legacy table is adopted only when it serves the embedded consumers' ready step; an older one fails the sess
+-- with its installed version named, and neither it nor any embedded copy is run or replaced.
+for _, case in ipairs({
+	{
+		name = "API 1",
+		core = { API = 1, Register = function() end, TrackerLine = { SetInteractive = function() end } },
+	},
+	{ name = "no Register", core = { API = 2, TrackerLine = { SetInteractive = function() end } } },
+	{ name = "no TrackerLine", core = { API = 2, Register = function() end } },
+	{ name = "no SetInteractive", core = { API = 2, Register = function() end, TrackerLine = {} } },
+}) do
+	local sess = newSession()
+	sess.env.C_AddOns = {
+		GetAddOnMetadata = function(name, key)
+			if name == "ForeverCore" and key == "Version" then
+				return "v1.7.0"
+			end
+		end,
+	}
+	sess.env.ForeverCore = case.core
+	sess:Candidate("Embedded", build(1, 9, 0))
+	sess.Fire("PLAYER_LOGIN")
+	check(sess.loader.Selected() == nil, "legacy " .. case.name .. " is not adopted")
+	local err = sess.loader.Error() or ""
+	check(err:find("too old", 1, true) and err:find("v1.7.0", 1, true), "legacy " .. case.name .. " names its version")
+	equal(#sess.boots, 0, "legacy " .. case.name .. " runs no embedded copy beside it")
+	check(rawequal(sess.env.ForeverCore, case.core), "legacy " .. case.name .. " stays the published table")
+end
+do
+	local sess = newSession()
+	sess.env.C_AddOns = {
+		GetAddOnMetadata = function()
+			return "v1.15.0"
+		end,
+	}
+	sess.env.ForeverCore = legacy
+	sess:Candidate("Embedded", build(1, 9, 0))
+	equal(sess.loader.Selected().version, "v1.15.0", "a compatible legacy selection reports its installed version")
+end
 
 print(("embedded_loader_spec: %d checks passed"):format(checks))

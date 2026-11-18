@@ -2,7 +2,8 @@
 -- Begin.lua calls Begin(folder, build, digest), its wrapped files call copy:Define(function(...) ... end), and its
 -- End.lua calls copy:Seal(). Registration and definition run no runtime code. At PLAYER_LOGIN the loader
 -- elects the highest sealed build, including standalone, and runs only that copy's chunks into a fresh
--- namespace, and publishes its facade once.
+-- namespace, and publishes its facade once. A host first loaded after login activates at its own ADDON_LOADED, and
+-- PLAYER_ENTERING_WORLD activates a session whose PLAYER_LOGIN the loader missed; Trace() records which one ran.
 --
 -- Schema 1 is immutable. A later schema is a new global name (ForeverCoreLoader2), never an upgrade of this table: an
 -- older copy must never call a newer loader's methods or the reverse. The first copy to load owns the registry for the
@@ -28,10 +29,29 @@ local state = {
 	onReady = {},
 	stores = {},
 	storesByFolder = {},
+	trace = {},
 }
+
+-- The loader's own record of what happened, in order: each copy's begin, seal and rejection, the events that drove
+-- activation and how the boot ended. A copy that registered but never ran is otherwise silent (Selected and Error
+-- both nil), so this is what an in-game check reads to see which step was reached. Bounded, oldest dropped first.
+local TRACE_LIMIT = 200
+local function Trace(kind, folder, detail)
+	local trace = state.trace
+	if #trace >= TRACE_LIMIT then
+		table.remove(trace, 1)
+	end
+	trace[#trace + 1] = {
+		kind = kind,
+		folder = folder ~= nil and tostring(folder) or nil,
+		detail = detail ~= nil and tostring(detail) or nil,
+		time = type(GetTime) == "function" and GetTime() or nil,
+	}
+end
 
 local function Record(folder, reason)
 	state.rejections[#state.rejections + 1] = { folder = tostring(folder or "?"), reason = reason }
+	Trace("reject", folder or "?", reason)
 	return false, reason
 end
 
@@ -89,19 +109,54 @@ local function CallLogin()
 	return Protected("loginError", login)
 end
 
+-- Logged in means PLAYER_LOGIN has fired in this session, whether this loader saw it or the client says so. A copy
+-- whose file first loads after login (an addon enabled mid-session, LoadAddOn) never sees PLAYER_LOGIN.
+local LOADING_EVENTS = { "PLAYER_LOGIN", "ADDON_LOADED", "PLAYER_ENTERING_WORLD" }
+
+local function LoggedIn()
+	local isLoggedIn = rawget(_G, "IsLoggedIn")
+	return state.loggedIn or (type(isLoggedIn) == "function" and isLoggedIn() == true)
+end
+
+-- Activation and its one login, from whichever event reached the loader first. Activation needs only sealed copies,
+-- so every path below waits for a host's files to have loaded (its ADDON_LOADED) or for login itself.
+local function ActivateNow(reason, folder)
+	Trace("activate", folder, reason)
+	state.loggedIn = true
+	Loader.Activate()
+	CallLogin()
+	if state.frame ~= nil then
+		for _, event in ipairs(LOADING_EVENTS) do
+			state.frame:UnregisterEvent(event)
+		end
+	end
+end
+
 -- The one loading frame, created by the first Begin. Every copy shares it, so a second loader copy adds no event.
+-- PLAYER_LOGIN is the normal path. A host loaded after login activates at its own ADDON_LOADED, once its files and
+-- SavedVariables are in. PLAYER_ENTERING_WORLD follows PLAYER_LOGIN on every login and reload, so a session in which
+-- this frame missed PLAYER_LOGIN still activates there, and the trace says so.
 local function EnsureLoginFrame()
 	if state.frame ~= nil or type(CreateFrame) ~= "function" then
 		return
 	end
 	local frame = CreateFrame("Frame")
-	frame:RegisterEvent("PLAYER_LOGIN")
-	frame:SetScript("OnEvent", function(_, event)
+	for _, event in ipairs(LOADING_EVENTS) do
+		frame:RegisterEvent(event)
+	end
+	frame:SetScript("OnEvent", function(_, event, name)
+		if state.activated then
+			return
+		end
 		if event == "PLAYER_LOGIN" then
 			-- All startup copies and account globals are available before election.
-			state.loggedIn = true
-			Loader.Activate()
-			CallLogin()
+			ActivateNow("PLAYER_LOGIN")
+		elseif event == "ADDON_LOADED" then
+			if state.byFolder[name] ~= nil and LoggedIn() then
+				ActivateNow("ADDON_LOADED after login", name)
+			end
+		elseif event == "PLAYER_ENTERING_WORLD" then
+			ActivateNow("PLAYER_ENTERING_WORLD without PLAYER_LOGIN")
 		end
 	end)
 	state.frame = frame
@@ -138,6 +193,7 @@ function methods:Seal()
 		return Record(self.folder, "empty")
 	end
 	self.sealed = true
+	Trace("seal", self.folder, #self.chunks)
 	return true
 end
 
@@ -161,6 +217,28 @@ local function LegacyCore()
 	if type(core) == "table" and core.loaderSchema ~= SCHEMA then
 		return core
 	end
+end
+
+-- The installed standalone's own version, for the report. A table published before this loader has no build field.
+local function LegacyVersion()
+	local addons = rawget(_G, "C_AddOns")
+	if type(addons) == "table" and type(addons.GetAddOnMetadata) == "function" then
+		local ok, version = pcall(addons.GetAddOnMetadata, "ForeverCore", "Version")
+		if ok and type(version) == "string" then
+			return version
+		end
+	end
+end
+
+-- A legacy table is adopted only when it offers what every embedding consumer's ready step uses: API 2, Register and
+-- the tracker line with SetInteractive. An older one cannot serve them, and a second runtime cannot start beside it, so
+-- the session fails with an error that names the version instead of handing consumers a table they would reject.
+local function LegacyCompatible(core)
+	local line = core.TrackerLine
+	return core.API == 2
+		and type(core.Register) == "function"
+		and type(line) == "table"
+		and type(line.SetInteractive) == "function"
 end
 
 -- A consumer callback is not a boot chunk: it runs after the winner owns the session. One failure is reported and
@@ -198,11 +276,12 @@ local function Boot(copy)
 	for index = 1, #copy.chunks do
 		copy.chunks[index]("ForeverCore", namespace)
 	end
+	-- Everything that can be checked without running the runtime is checked before Start, which installs hooks and
+	-- frames that cannot be undone: a copy that fails here leaves the client untouched.
 	local start = namespace.Start
 	if type(start) ~= "function" then
 		error("ForeverCore copy " .. copy.folder .. " published no namespace Start", 0)
 	end
-	start()
 	local facade = namespace.ForeverCore
 	if type(facade) ~= "table" then
 		error("ForeverCore copy " .. copy.folder .. " published no namespace facade", 0)
@@ -215,6 +294,14 @@ local function Boot(copy)
 	end
 	if facade.build ~= nil and facade.build ~= copy.build then
 		error("ForeverCore copy " .. copy.folder .. " published a build that is not the sealed build", 0)
+	end
+	local existing = rawget(_G, "ForeverCore")
+	if existing ~= nil and existing ~= facade then
+		error("ForeverCore copy " .. copy.folder .. " found another ForeverCore already published", 0)
+	end
+	start()
+	if namespace.ForeverCore ~= facade then
+		error("ForeverCore copy " .. copy.folder .. " replaced its facade during Start", 0)
 	end
 	local published = rawget(_G, "ForeverCore")
 	if published ~= nil and published ~= facade then
@@ -283,14 +370,25 @@ function Loader.Activate()
 	local legacy = state.legacy or LegacyCore()
 	if legacy ~= nil then
 		state.legacy = legacy
+		local version = LegacyVersion()
+		if not LegacyCompatible(legacy) then
+			state.error = "the installed ForeverCore "
+				.. tostring(version or "standalone")
+				.. " is too old for the embedded copies; update or disable it"
+			Trace("legacy", "ForeverCore", "incompatible " .. tostring(version))
+			RunReady()
+			return nil
+		end
 		state.facade = legacy
-		state.selection = { mode = "legacy", core = legacy }
+		state.selection = { mode = "legacy", core = legacy, version = version }
+		Trace("legacy", "ForeverCore", version)
 		RunReady()
 		return legacy
 	end
 	local chosen = Elect()
 	if chosen == nil then
 		state.error = state.error or "no sealed ForeverCore copy"
+		Trace("boot", nil, state.error)
 		RunReady()
 		return nil
 	end
@@ -309,6 +407,7 @@ function Loader.Activate()
 		state.error = tostring(err)
 		state.selection = nil
 	end
+	Trace("boot", chosen.folder, ok and "ok" or state.error)
 	RunReady()
 	return state.facade
 end
@@ -351,6 +450,7 @@ function Loader.Begin(folder, build, digest)
 	}, { __index = methods })
 	state.byFolder[folder] = copy
 	state.candidates[#state.candidates + 1] = copy
+	Trace("begin", folder, build)
 	EnsureLoginFrame()
 	return copy
 end
@@ -433,6 +533,7 @@ function Loader.Selected()
 	local selection = state.selection
 	return {
 		mode = selection.mode,
+		version = selection.version,
 		build = selection.build,
 		folder = selection.folder,
 		root = selection.root,
@@ -466,6 +567,15 @@ function Loader.Rejections()
 	local out = {}
 	for index, rejection in ipairs(state.rejections) do
 		out[index] = { folder = rejection.folder, reason = rejection.reason }
+	end
+	return out
+end
+
+-- The loader's ordered record (see Trace above), copied so a caller cannot change it.
+function Loader.Trace()
+	local out = {}
+	for index, entry in ipairs(state.trace) do
+		out[index] = { kind = entry.kind, folder = entry.folder, detail = entry.detail, time = entry.time }
 	end
 	return out
 end

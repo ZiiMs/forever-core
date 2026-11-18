@@ -173,9 +173,10 @@ do
 	check(env.ForeverCore == legacy, "unsupported existing facade is never overwritten")
 	check(env.ConsumerStarts == nil, "unsupported API cannot initialize consumer")
 	check(
-		string.find(env.ForeverCoreLoader.CallbackError() or "", "incompatible ForeverCore API", 1, true),
+		string.find(env.ForeverCoreLoader.Error() or "", "too old for the embedded copies", 1, true),
 		"unsupported legacy API is reported"
 	)
+	check(env.ForeverCoreLoader.Selected() == nil, "an unsupported legacy facade is never selected")
 end
 -- Real unwrapped canonical source is the supported API2 legacy facade fixture.
 -- It owns its already-running runtime; embedded wrappers must remain inert.
