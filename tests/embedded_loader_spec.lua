@@ -19,7 +19,7 @@ local function Facade()
 	return {
 		API = 2,
 		Register = function() end,
-		TrackerLine = { SetInteractive = function() end },
+		TrackerLine = { SetInteractive = function() end, template = "Test_ForeverCore_Line" },
 		name = "ForeverCore",
 	}
 end
@@ -781,6 +781,8 @@ local paths = {
 			sess.Fire("ADDON_LOADED", "Host")
 			sess.Fire("ADDON_LOADED", "Other")
 			sess.Fire("PLAYER_ENTERING_WORLD", true, false)
+			check(#sess.boots == 0, "the world-entry start waits for the next frame")
+			sess.Tick()
 		end,
 	},
 	{
@@ -791,6 +793,7 @@ local paths = {
 			check(sess.loader.Selected() == nil and sess.loader.Error() == nil, "the stores are not loaded yet")
 			check(#sess.boots == 0, "so nothing boots")
 			sess.Fire("VARIABLES_LOADED")
+			sess.Tick()
 		end,
 	},
 	{
@@ -870,12 +873,26 @@ local outcomes = {
 		expect = "error",
 		noStart = true,
 	},
+	{
+		name = "a copy with no tracker line template",
+		chunk = function(_, core)
+			core.TrackerLine.template = nil
+		end,
+		expect = "error",
+		noStart = true,
+	},
 	{ name = "two conflicting copies", conflict = true, expect = "error" },
 }
 for _, path in ipairs(paths) do
 	for _, outcome in ipairs(outcomes) do
 		local label = (path.label or path.name) .. " / " .. outcome.name
 		local sess = newSession()
+		sess.handled = {}
+		sess.env.geterrorhandler = function()
+			return function(message)
+				sess.handled[#sess.handled + 1] = tostring(message)
+			end
+		end
 		if path.loggedIn then
 			sess.env.IsLoggedIn = function()
 				return true
@@ -894,6 +911,8 @@ for _, path in ipairs(paths) do
 			equal(#sess.logins, 1, label .. ": its Login runs once")
 		else
 			check(err ~= nil, label .. ": the failure is reported")
+			equal(#sess.handled, 1, label .. ": once, through the client's error handler")
+			check(sess.handled[1]:find(err, 1, true) ~= nil, label .. ": naming the loader's error")
 			equal(#sess.logins, 0, label .. ": no Login runs after a failed boot")
 		end
 		if outcome.noStart then

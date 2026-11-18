@@ -157,6 +157,10 @@ end
 -- as a compatible legacy runtime or replaced with a second active runtime.
 do
 	local env = FakeClient.new()
+	local handled = {}
+	env.errorHandler = function(message)
+		handled[#handled + 1] = tostring(message)
+	end
 	local legacy = {
 		API = 1,
 		Register = function()
@@ -177,6 +181,8 @@ do
 		"unsupported legacy API is reported"
 	)
 	check(env.ForeverCoreLoader.Selected() == nil, "an unsupported legacy facade is never selected")
+	check(#handled == 1 and handled[1]:find("too old", 1, true), "the client error handler gets the named failure once")
+	check(env.ForeverCoreLoader.CallbackError() == nil, "and the consumer's ready step stays quiet")
 end
 -- A host loaded after another copy is running (load on demand) joins that copy. Its own copy is recorded as late, its
 -- files load without a packaging error, its ready entry starts once its own ADDON_LOADED has restored its account

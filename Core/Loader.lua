@@ -293,6 +293,19 @@ local function NextFrame(callback)
 	end
 end
 
+-- A session that cannot run ForeverCore says why once, through the client's error handler (BugSack, the script error
+-- display), so each consumer's own ready step can stay quiet instead of repeating a generic failure.
+local function ReportFailure()
+	if state.failureReported or state.error == nil then
+		return
+	end
+	state.failureReported = true
+	local handler = type(geterrorhandler) == "function" and geterrorhandler() or nil
+	if type(handler) == "function" then
+		pcall(handler, "ForeverCore: " .. state.error)
+	end
+end
+
 -- One login per session, after activation and its ready callbacks. Legacy and a failed boot have no namespace, so
 -- they never run it. A converted runtime defines namespace.Login; a copy that does not is a broken package.
 local function CallLogin()
@@ -450,12 +463,14 @@ local function OnEvent(frame, event, name, ...)
 		if LoggedIn() then
 			ScheduleActivation("ADDON_LOADED after login", name)
 		elseif state.seen.PLAYER_ENTERING_WORLD and SavedVariablesReady() then
-			ActivateNow("PLAYER_ENTERING_WORLD without PLAYER_LOGIN", name)
+			ScheduleActivation("PLAYER_ENTERING_WORLD without PLAYER_LOGIN", name)
 		end
 	elseif state.seen.PLAYER_ENTERING_WORLD then
-		-- PLAYER_ENTERING_WORLD, or a VARIABLES_LOADED that completes the stores it was waiting for.
+		-- PLAYER_ENTERING_WORLD, or a VARIABLES_LOADED that completes the stores it was waiting for. Like the
+		-- after-login path, it runs on the next frame, so the consumer files' replay of the world entry they missed is
+		-- its only delivery.
 		if SavedVariablesReady() then
-			ActivateNow("PLAYER_ENTERING_WORLD without PLAYER_LOGIN")
+			ScheduleActivation("PLAYER_ENTERING_WORLD without PLAYER_LOGIN")
 		elseif event == "PLAYER_ENTERING_WORLD" then
 			Trace("wait", nil, "PLAYER_ENTERING_WORLD before SavedVariables")
 		end
@@ -645,6 +660,10 @@ local function Boot(copy)
 	if not ServesConsumers(facade) then
 		error("ForeverCore copy " .. copy.folder .. " published a facade the consumers cannot use", 0)
 	end
+	-- The copy's End.lua names its own tracker line template, which every consumer's ready step draws with.
+	if type(facade.TrackerLine.template) ~= "string" then
+		error("ForeverCore copy " .. copy.folder .. " published no tracker line template", 0)
+	end
 	if facade.loaderSchema ~= nil and facade.loaderSchema ~= SCHEMA then
 		error("ForeverCore copy " .. copy.folder .. " published an incompatible loader schema", 0)
 	end
@@ -738,6 +757,7 @@ function Loader.Activate()
 				.. tostring(version or "standalone")
 				.. " is too old for the embedded copies; update or disable it"
 			Trace("legacy", "ForeverCore", "incompatible " .. tostring(version))
+			ReportFailure()
 			RunReady()
 			return nil
 		end
@@ -762,6 +782,7 @@ function Loader.Activate()
 			state.activated = true
 			state.error = "conflicting ForeverCore copies at build " .. state.conflict
 			Trace("boot", nil, state.error)
+			ReportFailure()
 			RunReady()
 			return nil
 		end
@@ -787,6 +808,7 @@ function Loader.Activate()
 		state.selection = nil
 	end
 	Trace("boot", chosen.folder, ok and "ok" or state.error)
+	ReportFailure()
 	RunReady()
 	return state.facade
 end

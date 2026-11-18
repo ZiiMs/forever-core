@@ -43,8 +43,10 @@ local function session(order, saved)
 				end)
 			end
 		end
-		copy:Define(function()
+		copy:Define(function(_, ns)
 			defining = false
+			-- What the generated End.lua defines: the copy's own tracker line template.
+			ns.TrackerLine.template = folder .. "_ForeverCore_ForeverTrackerLineTemplate"
 		end)
 		check(copy:Seal(), "real runtime seals")
 		local name = folder .. "DB"

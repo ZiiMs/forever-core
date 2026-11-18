@@ -153,7 +153,8 @@ def plan(
             f'assert(type({saved_variable}) == "table", "account SavedVariables must be a table")\n'
             "loaded = true\ntryStart()\nend)\n"
             "ForeverCoreLoader.OnReady(function(core, selected)\n"
-            'assert(core, "ForeverCore did not activate")\n'
+            # The loader reports a failed activation once, by name; each consumer's ready step stays quiet.
+            "if core == nil then return end\n"
             f'assert(core.API == {API}, "incompatible ForeverCore API")\n'
             'assert(type(core.Register) == "function", "ForeverCore Register unavailable")\n'
             'assert(type(core.TrackerLine) == "table", "ForeverCore TrackerLine unavailable")\n'

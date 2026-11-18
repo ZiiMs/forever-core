@@ -82,6 +82,22 @@ class EmbedTest(unittest.TestCase):
         )
         subprocess.run(["luajit", "-e", script], check=True)
 
+    def test_a_core_with_the_revision_1_loader_is_refused(self):
+        old = Path(self.root.parent) / "OldCore" / "Core"
+        old.mkdir(parents=True)
+        (old / "Loader.lua").write_text("local SCHEMA = 1\n")
+        self.assertEqual(embed.loader_revision(old.parent), 1)
+        with self.assertRaisesRegex(embed.EmbedError, "loader revision 1"):
+            embed.transform(self.root, old.parent, "1.15.0")
+        self.assertGreaterEqual(embed.loader_revision(CORE), embed.MIN_LOADER_REVISION)
+
+    @unittest.skipUnless(shutil.which("luajit"), "luajit not on PATH")
+    def test_the_addon_files_get_the_loading_events_they_missed(self):
+        self.run_embed()
+        run = self.root / embed.HOST_RUN
+        harness = Path(__file__).with_name("run_replay_harness.lua")
+        subprocess.run(["luajit", str(harness), str(run)], check=True)
+
     @unittest.skipUnless(shutil.which("git"), "git not on PATH")
     def test_in_a_git_checkout_the_new_files_are_tracked_for_the_packager(self):
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
