@@ -134,7 +134,11 @@ if type(existing) == "table" then
 end
 
 -- The column frame, its pools and its events are made at Start (end of file): defining the runtime touches nothing.
----@type Frame
+---@class ForeverTrackerColumn: Frame
+---@field MarkDirty fun(self: ForeverTrackerColumn)
+---@field IsCollapsed fun(self: ForeverTrackerColumn): boolean
+---@field ForceExpand fun(self: ForeverTrackerColumn)
+---@type ForeverTrackerColumn
 local host
 ---@class ForeverTrackerHostAPI
 local api = {}
@@ -1043,6 +1047,7 @@ local function Layout()
 end
 
 -- The column's own methods, given to the frame when Start makes it.
+---@class ForeverTrackerColumnMethods
 local column = {}
 function column.MarkDirty(_)
 	-- Combat queues nothing: the column holds its last layout until PLAYER_REGEN_ENABLED runs the deferred pass.
@@ -1557,7 +1562,7 @@ end
 ns.TrackerHost = api
 
 ns.AtStart(function()
-	host = CreateFrame("Frame", "ForeverTrackerCompanion", UIParent)
+	host = CreateFrame("Frame", "ForeverTrackerCompanion", UIParent) --[[@as ForeverTrackerColumn]]
 	for key, method in pairs(column) do
 		host[key] = method
 	end
