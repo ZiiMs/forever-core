@@ -14,10 +14,61 @@ local SCHEMA = 1
 local REVISION = 2
 local TRACE_LIMIT = 200
 
+local function BuildVersion(build)
+	return string.format("%d.%d.%d", math.floor(build / 1000000), math.floor(build / 1000) % 1000, build % 1000)
+end
+
+local function VersionBuild(version)
+	local major, minor, patch = string.match(tostring(version or ""), "^v?(%d+)%.(%d+)%.(%d+)")
+	if major ~= nil then
+		return tonumber(major) * 1000000 + tonumber(minor) * 1000 + tonumber(patch)
+	end
+end
+
+-- The installed standalone's own version, for the report. A table published before this loader has no build field.
+local function InstalledVersion()
+	local addons = rawget(_G, "C_AddOns")
+	if type(addons) == "table" and type(addons.GetAddOnMetadata) == "function" then
+		local ok, version = pcall(addons.GetAddOnMetadata, "ForeverCore", "Version")
+		if ok and type(version) == "string" then
+			return version
+		end
+	end
+end
+
+local function OutdatedText(version, newest)
+	return "ForeverCore "
+		.. tostring(version or "")
+		.. " is older than the ForeverCore "
+		.. BuildVersion(newest)
+		.. " your addons include. Update or disable ForeverCore."
+end
+
+-- The outdated-standalone notice, on screen on the next frame. Never a chat line. Callers show it once per session.
+local function ShowNotice(text)
+	local function show()
+		local dialogs = rawget(_G, "StaticPopupDialogs")
+		local popup = rawget(_G, "StaticPopup_Show")
+		if type(dialogs) ~= "table" or type(popup) ~= "function" then
+			return
+		end
+		dialogs.FOREVERCORE_OUTDATED = dialogs.FOREVERCORE_OUTDATED
+			or { text = "%s", button1 = rawget(_G, "OKAY") or "OK", timeout = 0, whileDead = true, hideOnEscape = true }
+		popup("FOREVERCORE_OUTDATED", text)
+	end
+	local timer = rawget(_G, "C_Timer")
+	if type(timer) == "table" and type(timer.After) == "function" then
+		timer.After(0, show)
+	else
+		show()
+	end
+end
+
 -- An older revision that loaded first owns the registry, and its private state cannot be replaced. This copy adds
 -- what it lacks through its public schema-1 methods only: it records the world events for Seen and WorldEntry, and
 -- activates the registry at PLAYER_ENTERING_WORLD when revision 1 missed PLAYER_LOGIN. Activation stays the old
--- loader's own: its Activate is idempotent, and the runtime's Login guards itself (ns.loginDone).
+-- loader's own: its Activate is idempotent, and the runtime's Login guards itself (ns.loginDone). When revision 1
+-- adopted an older standalone over newer registered copies, the world entry shows the outdated notice once.
 local function Supervise(old)
 	if old.revision ~= nil or rawget(old, "supervised") ~= nil or type(CreateFrame) ~= "function" then
 		return
@@ -55,15 +106,32 @@ local function Supervise(old)
 			return
 		end
 		entry = { ... }
-		if old.Selected() ~= nil or old.Error() ~= nil then
+		if old.Selected() == nil and old.Error() == nil then
+			-- The world is entered, so every startup host's files and SavedVariables are in.
+			Note("activate", "PLAYER_ENTERING_WORLD without PLAYER_LOGIN (revision 1 registry)")
+			old.Activate()
+			local namespace = old.Namespace()
+			if namespace ~= nil and type(namespace.Login) == "function" then
+				pcall(namespace.Login)
+			end
+		end
+		local selected = old.Selected()
+		if selected == nil or selected.mode ~= "legacy" then
 			return
 		end
-		-- The world is entered, so every startup host's files and SavedVariables are in.
-		Note("activate", "PLAYER_ENTERING_WORLD without PLAYER_LOGIN (revision 1 registry)")
-		old.Activate()
-		local namespace = old.Namespace()
-		if namespace ~= nil and type(namespace.Login) == "function" then
-			pcall(namespace.Login)
+		local newest
+		for _, copy in ipairs(old.Candidates()) do
+			if copy.rejected == nil and (newest == nil or copy.build > newest) then
+				newest = copy.build
+			end
+		end
+		if newest ~= nil then
+			local text = OutdatedText(InstalledVersion(), newest)
+			old.Warning = old.Warning or function()
+				return text
+			end
+			Note("legacy", "older than embedded " .. BuildVersion(newest))
+			ShowNotice(text)
 		end
 	end)
 	Note("supervise", "revision 1 registry")
@@ -126,10 +194,6 @@ local function ValidBuild(build)
 	return type(build) == "number" and build == build and build >= 1000000 and build % 1 == 0
 end
 
-local function BuildVersion(build)
-	return string.format("%d.%d.%d", math.floor(build / 1000000), math.floor(build / 1000) % 1000, build % 1000)
-end
-
 -- An embedded copy lives under the consumer's Libs folder. The standalone participant keeps the top-level addon
 -- layout its TOC and media already use, so its root is the addon folder itself.
 local function Root(folder)
@@ -189,7 +253,7 @@ local function CallLogin()
 	return Protected("loginError", login)
 end
 
--- The outdated-standalone notice: once per session, on screen, after the world is entered. Never a chat line.
+-- The outdated-standalone notice: once per session, after the world is entered.
 local function ShowWarning()
 	if state.warning == nil or state.warningShown then
 		return
@@ -198,17 +262,8 @@ local function ShowWarning()
 		state.warnAtEntry = true
 		return
 	end
-	NextFrame(function()
-		local dialogs = rawget(_G, "StaticPopupDialogs")
-		local show = rawget(_G, "StaticPopup_Show")
-		if state.warningShown or type(dialogs) ~= "table" or type(show) ~= "function" then
-			return
-		end
-		state.warningShown = true
-		dialogs.FOREVERCORE_OUTDATED = dialogs.FOREVERCORE_OUTDATED
-			or { text = "%s", button1 = rawget(_G, "OKAY") or "OK", timeout = 0, whileDead = true, hideOnEscape = true }
-		show("FOREVERCORE_OUTDATED", state.warning)
-	end)
+	state.warningShown = true
+	ShowNotice(state.warning)
 end
 
 -- Logged in means PLAYER_LOGIN has fired in this session, whether this loader saw it or the client says so. A copy
@@ -441,24 +496,6 @@ local function LegacyCore()
 	end
 end
 
--- The installed standalone's own version, for the report. A table published before this loader has no build field.
-local function LegacyVersion()
-	local addons = rawget(_G, "C_AddOns")
-	if type(addons) == "table" and type(addons.GetAddOnMetadata) == "function" then
-		local ok, version = pcall(addons.GetAddOnMetadata, "ForeverCore", "Version")
-		if ok and type(version) == "string" then
-			return version
-		end
-	end
-end
-
-local function VersionBuild(version)
-	local major, minor, patch = string.match(tostring(version or ""), "^v?(%d+)%.(%d+)%.(%d+)")
-	if major ~= nil then
-		return tonumber(major) * 1000000 + tonumber(minor) * 1000 + tonumber(patch)
-	end
-end
-
 -- An adopted legacy table always predates every registered copy (it has no loader schema), so any registered copy
 -- makes it the older runtime. It still serves the session, since a second runtime cannot start beside it, and the
 -- player is told once which install to update.
@@ -477,11 +514,7 @@ local function CheckLegacyAge()
 		return
 	end
 	selection.newest = newest
-	state.warning = "ForeverCore "
-		.. tostring(selection.version or "")
-		.. " is older than the ForeverCore "
-		.. BuildVersion(newest)
-		.. " your addons include. Update or disable ForeverCore."
+	state.warning = OutdatedText(selection.version, newest)
 	Trace("legacy", "ForeverCore", "older than embedded " .. BuildVersion(newest))
 	ShowWarning()
 end
@@ -635,7 +668,7 @@ function Loader.Activate()
 	if legacy ~= nil then
 		state.activated = true
 		state.legacy = legacy
-		local version = LegacyVersion()
+		local version = InstalledVersion()
 		if not ServesConsumers(legacy) then
 			state.error = "the installed ForeverCore "
 				.. tostring(version or "standalone")

@@ -1140,4 +1140,32 @@ for _, case in ipairs({
 	equal(kinds[1], "supervise", case.name .. ": the trace says the registry is supervised")
 end
 
+-- The released 1.15.0 standalone: its revision 1 loader loads first and its pre-loader table is published at file load,
+-- so revision 1 adopts it as legacy at the first Begin. The newer embedded copy's supervisor shows the outdated
+-- notice once at the world entry.
+do
+	local sess = newSession("tests/fixtures/loader_revision1.lua")
+	local shown = {}
+	sess.env.StaticPopupDialogs = {}
+	sess.env.StaticPopup_Show = function(which, message)
+		shown[#shown + 1] = which .. ":" .. tostring(message)
+	end
+	sess.env.C_AddOns = {
+		GetAddOnMetadata = function()
+			return "v1.15.0"
+		end,
+	}
+	sess.env.ForeverCore = legacy
+	sess:Candidate("Embedded", build(1, 16, 0))
+	equal(sess.loader.Selected() and sess.loader.Selected().mode, "legacy", "revision 1 adopts the standalone")
+	equal(#sess.boots, 0, "and runs no embedded copy beside it")
+	sess.Fire("PLAYER_LOGIN")
+	sess.Fire("PLAYER_ENTERING_WORLD", true, false)
+	sess.Tick()
+	equal(#shown, 1, "the outdated notice shows once")
+	check(shown[1]:find("v1.15.0", 1, true) and shown[1]:find("1.16.0", 1, true), "naming both versions")
+	check((sess.loader.Warning() or ""):find("Update or disable ForeverCore", 1, true), "and Warning reports it")
+	equal(#sess.boots, 0, "still no second runtime")
+end
+
 print(("embedded_loader_spec: %d checks passed"):format(checks))
