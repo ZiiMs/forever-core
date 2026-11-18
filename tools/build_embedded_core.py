@@ -122,14 +122,18 @@ def plan(
             raise ValueError(f"unsupported canonical TOC entry: {name}")
     if TEMPLATE not in templates:
         raise ValueError("canonical tracker template missing")
+    # A host first loaded after another copy is running (load on demand) joins that copy: the loader records its own
+    # copy and store offer as "late", which is not a packaging error. Any other refusal still stops the load.
     output[prefix + "Begin.lua"] = (
         f'local addon, host = ...\nhost.ForeverCoreCopy = ForeverCoreLoader.Begin(addon, {build}, "{identity}")\n'
-        f'assert(ForeverCoreLoader.OfferStore(addon, "{saved_variable}"))\n'
+        f'local offered, reason = ForeverCoreLoader.OfferStore(addon, "{saved_variable}")\n'
+        'assert(offered or reason == "late", reason)\n'
     ).encode()
     output[prefix + "End.lua"] = (
         "local _, host = ...\nhost.ForeverCoreCopy:Define(function(_, ns)\n"
         f'ns.TrackerLine.template = "{template_name}"\nend)\n'
-        "assert(host.ForeverCoreCopy:Seal())\n"
+        "local sealed, reason = host.ForeverCoreCopy:Seal()\n"
+        'assert(sealed or reason == "late", reason)\n'
     ).encode()
     output["ForeverCoreReady.lua"] = (
         b"local addon, host = ...\nlocal readyCore, resources, loaded, started\nlocal function initialize(...)\n"

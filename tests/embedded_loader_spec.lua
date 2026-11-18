@@ -14,6 +14,16 @@ local function equal(actual, expected, label)
 	end
 end
 
+-- A facade every consumer can use: API 2, Register and the tracker line with SetInteractive.
+local function Facade()
+	return {
+		API = 2,
+		Register = function() end,
+		TrackerLine = { SetInteractive = function() end },
+		name = "ForeverCore",
+	}
+end
+
 -- The release build formula: major * 1e6 + minor * 1e3 + patch.
 local function build(major, minor, patch)
 	return major * 1000000 + minor * 1000 + (patch or 0)
@@ -68,7 +78,7 @@ local function newSession()
 			local identity, ns = ...
 			self.identities[folder] = identity
 			self.boots[#self.boots + 1] = folder
-			local core = { API = 1, Register = function() end, name = "ForeverCore" }
+			local core = Facade()
 			ns.Start = function()
 				self.starts[#self.starts + 1] = folder
 			end
@@ -188,7 +198,7 @@ local first = session.loader.Begin("AddonA", build(1, 7, 0))
 first:Define(function(_, ns)
 	ns.Start = function() end
 	ns.Login = function() end
-	ns.ForeverCore = { API = 1, Register = function() end, name = "ForeverCore" }
+	ns.ForeverCore = Facade()
 end)
 check(first:Seal(), "the first copy seals")
 local second = session.loader.Begin("AddonA", build(1, 9, 0))
@@ -357,7 +367,7 @@ session = newSession()
 local noStart = session.loader.Begin("NoStart", build(1, 9, 0))
 noStart:Define(function(_, ns)
 	ns.Login = function() end
-	ns.ForeverCore = { API = 1, Register = function() end, name = "ForeverCore" }
+	ns.ForeverCore = Facade()
 end)
 check(noStart:Seal(), "the Start-less copy seals")
 session.Fire("PLAYER_LOGIN")
@@ -557,7 +567,8 @@ session = newSession()
 local globalOnly = session.loader.Begin("GlobalOnly", build(1, 7, 0))
 globalOnly:Define(function(_, ns)
 	ns.Start = function() end
-	session.env.ForeverCore = { API = 1, Register = function() end, name = "ForeverCore" }
+	ns.Login = function() end
+	session.env.ForeverCore = Facade()
 end)
 check(globalOnly:Seal(), "the global-only copy seals")
 session.Fire("PLAYER_LOGIN")
@@ -781,6 +792,30 @@ local outcomes = {
 		expect = "error",
 		noStart = true,
 	},
+	{
+		name = "a copy whose facade is not API 2",
+		chunk = function(_, core)
+			core.API = 1
+		end,
+		expect = "error",
+		noStart = true,
+	},
+	{
+		name = "a copy with no tracker line",
+		chunk = function(_, core)
+			core.TrackerLine = nil
+		end,
+		expect = "error",
+		noStart = true,
+	},
+	{
+		name = "a copy with no Login",
+		chunk = function(ns)
+			ns.Login = nil
+		end,
+		expect = "error",
+		noStart = true,
+	},
 	{ name = "two conflicting copies", conflict = true, expect = "error" },
 }
 for _, path in ipairs(paths) do
@@ -888,6 +923,36 @@ do
 	sess.env.ForeverCore = legacy
 	sess:Candidate("Embedded", build(1, 9, 0))
 	equal(sess.loader.Selected().version, "v1.15.0", "a compatible legacy selection reports its installed version")
+end
+
+-- The loading frame records PLAYER_ENTERING_WORLD and VARIABLES_LOADED once seen, with the first entry's arguments, so
+-- a runtime booted after them does not wait for them again. A loader first made after login counts both as past.
+do
+	local sess = newSession()
+	sess:Candidate("AddonA", build(1, 7, 0))
+	check(not sess.loader.Seen("PLAYER_ENTERING_WORLD"), "the world entry is not past before it fires")
+	sess.Fire("PLAYER_LOGIN")
+	check(not sess.loader.Seen("VARIABLES_LOADED"), "nor are the saved variables")
+	for _, loadingFrame in ipairs(sess.frames) do
+		if loadingFrame.events.PLAYER_ENTERING_WORLD and loadingFrame.scripts.OnEvent then
+			loadingFrame.scripts.OnEvent(loadingFrame, "PLAYER_ENTERING_WORLD", true, false)
+		end
+	end
+	sess.Fire("VARIABLES_LOADED")
+	check(sess.loader.Seen("PLAYER_ENTERING_WORLD"), "the world entry is recorded after activation too")
+	check(sess.loader.Seen("VARIABLES_LOADED"), "and the saved variables")
+	local initial, reloading = sess.loader.WorldEntry()
+	check(initial == true and reloading == false, "with the first entry's arguments")
+	check(not sess.frames[1].events.PLAYER_ENTERING_WORLD, "then the frame stops listening for it")
+	check(not sess.frames[1].events.VARIABLES_LOADED, "and for the saved variables")
+
+	local lateSess = newSession()
+	lateSess.env.IsLoggedIn = function()
+		return true
+	end
+	lateSess:Candidate("LateHost", build(1, 7, 0))
+	check(lateSess.loader.Seen("PLAYER_ENTERING_WORLD"), "a loader made after login counts the world entry as past")
+	check(lateSess.loader.Seen("VARIABLES_LOADED"), "and the saved variables")
 end
 
 print(("embedded_loader_spec: %d checks passed"):format(checks))

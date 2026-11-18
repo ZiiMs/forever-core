@@ -971,6 +971,9 @@ function ns.Login()
 	if ns.AttachCoreDb then
 		ns.AttachCoreDb()
 	end
+	if ns.copy ~= nil and ns.DebugCaptureCatchUp then
+		ns.DebugCaptureCatchUp()
+	end
 end
 
 -- The one ADDON_LOADED handler for the transitional unwrapped standalone. Saved variables can be nil on a first

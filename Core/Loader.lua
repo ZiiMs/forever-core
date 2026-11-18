@@ -30,6 +30,7 @@ local state = {
 	stores = {},
 	storesByFolder = {},
 	trace = {},
+	seen = {},
 }
 
 -- The loader's own record of what happened, in order: each copy's begin, seal and rejection, the events that drove
@@ -111,7 +112,11 @@ end
 
 -- Logged in means PLAYER_LOGIN has fired in this session, whether this loader saw it or the client says so. A copy
 -- whose file first loads after login (an addon enabled mid-session, LoadAddOn) never sees PLAYER_LOGIN.
-local LOADING_EVENTS = { "PLAYER_LOGIN", "ADDON_LOADED", "PLAYER_ENTERING_WORLD" }
+-- PLAYER_LOGIN and ADDON_LOADED only drive activation. PLAYER_ENTERING_WORLD and VARIABLES_LOADED are also recorded
+-- once seen (Loader.Seen), because a runtime that boots after either has fired must not wait for it again: an
+-- EventUtil.ContinueAfterAllEvents registered after the event never completes.
+local ACTIVATION_EVENTS = { "PLAYER_LOGIN", "ADDON_LOADED" }
+local WORLD_EVENTS = { "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED" }
 
 local function LoggedIn()
 	local isLoggedIn = rawget(_G, "IsLoggedIn")
@@ -123,13 +128,13 @@ end
 local function ActivateNow(reason, folder)
 	Trace("activate", folder, reason)
 	state.loggedIn = true
-	Loader.Activate()
-	CallLogin()
 	if state.frame ~= nil then
-		for _, event in ipairs(LOADING_EVENTS) do
+		for _, event in ipairs(ACTIVATION_EVENTS) do
 			state.frame:UnregisterEvent(event)
 		end
 	end
+	Loader.Activate()
+	CallLogin()
 end
 
 -- The one loading frame, created by the first Begin. Every copy shares it, so a second loader copy adds no event.
@@ -141,10 +146,29 @@ local function EnsureLoginFrame()
 		return
 	end
 	local frame = CreateFrame("Frame")
-	for _, event in ipairs(LOADING_EVENTS) do
+	state.frame = frame
+	for _, event in ipairs(ACTIVATION_EVENTS) do
 		frame:RegisterEvent(event)
 	end
-	frame:SetScript("OnEvent", function(_, event, name)
+	if LoggedIn() then
+		-- Only a load-on-demand host first loads after login, and the client loads it once the world is entered.
+		for _, event in ipairs(WORLD_EVENTS) do
+			state.seen[event] = true
+		end
+	else
+		for _, event in ipairs(WORLD_EVENTS) do
+			frame:RegisterEvent(event)
+		end
+	end
+	frame:SetScript("OnEvent", function(_, event, name, ...)
+		if event == "PLAYER_ENTERING_WORLD" or event == "VARIABLES_LOADED" then
+			-- Recorded before any activation below, so the runtime it boots already sees this event as past.
+			state.seen[event] = true
+			if event == "PLAYER_ENTERING_WORLD" then
+				state.worldEntry = { name, ... }
+			end
+			frame:UnregisterEvent(event)
+		end
 		if state.activated then
 			return
 		end
@@ -159,7 +183,6 @@ local function EnsureLoginFrame()
 			ActivateNow("PLAYER_ENTERING_WORLD without PLAYER_LOGIN")
 		end
 	end)
-	state.frame = frame
 end
 
 local methods = {}
@@ -230,12 +253,13 @@ local function LegacyVersion()
 	end
 end
 
--- A legacy table is adopted only when it offers what every embedding consumer's ready step uses: API 2, Register and
--- the tracker line with SetInteractive. An older one cannot serve them, and a second runtime cannot start beside it, so
--- the session fails with an error that names the version instead of handing consumers a table they would reject.
-local function LegacyCompatible(core)
+-- What every embedding consumer's ready step uses: API 2, Register and the tracker line with SetInteractive. One rule
+-- for every mode: a legacy table that fails it is not adopted (a second runtime cannot start beside it, so the session
+-- fails naming its version), and an elected copy that fails it is refused before its Start.
+local CONSUMER_API = 2
+local function ServesConsumers(core)
 	local line = core.TrackerLine
-	return core.API == 2
+	return core.API == CONSUMER_API
 		and type(core.Register) == "function"
 		and type(line) == "table"
 		and type(line.SetInteractive) == "function"
@@ -282,12 +306,15 @@ local function Boot(copy)
 	if type(start) ~= "function" then
 		error("ForeverCore copy " .. copy.folder .. " published no namespace Start", 0)
 	end
+	if type(namespace.Login) ~= "function" then
+		error("ForeverCore copy " .. copy.folder .. " published no namespace Login", 0)
+	end
 	local facade = namespace.ForeverCore
 	if type(facade) ~= "table" then
 		error("ForeverCore copy " .. copy.folder .. " published no namespace facade", 0)
 	end
-	if type(facade.API) ~= "number" or type(facade.Register) ~= "function" then
-		error("ForeverCore copy " .. copy.folder .. " published an incomplete facade", 0)
+	if not ServesConsumers(facade) then
+		error("ForeverCore copy " .. copy.folder .. " published a facade the consumers cannot use", 0)
 	end
 	if facade.loaderSchema ~= nil and facade.loaderSchema ~= SCHEMA then
 		error("ForeverCore copy " .. copy.folder .. " published an incompatible loader schema", 0)
@@ -371,7 +398,7 @@ function Loader.Activate()
 	if legacy ~= nil then
 		state.legacy = legacy
 		local version = LegacyVersion()
-		if not LegacyCompatible(legacy) then
+		if not ServesConsumers(legacy) then
 			state.error = "the installed ForeverCore "
 				.. tostring(version or "standalone")
 				.. " is too old for the embedded copies; update or disable it"
@@ -578,4 +605,19 @@ function Loader.Trace()
 		out[index] = { kind = entry.kind, folder = entry.folder, detail = entry.detail, time = entry.time }
 	end
 	return out
+end
+
+-- Whether PLAYER_ENTERING_WORLD or VARIABLES_LOADED has already fired this session, as the loading frame saw it. The
+-- runtime's waits skip an event that is already past instead of waiting for one that will not come again.
+function Loader.Seen(event)
+	return state.seen[event] == true
+end
+
+-- The arguments of the first PLAYER_ENTERING_WORLD the loading frame saw (isInitialLogin, isReloadingUi), for a
+-- runtime booted after it that needs to know which kind of entry this session began with.
+function Loader.WorldEntry()
+	local entry = state.worldEntry
+	if entry ~= nil then
+		return entry[1], entry[2]
+	end
 end
