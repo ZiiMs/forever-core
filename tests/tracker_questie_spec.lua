@@ -203,6 +203,49 @@ reloaded.check(Under(reloaded, 700, 600), "after a reload the first layout puts 
 Resize(reloadedList, 300)
 reloaded.check(Under(reloaded, 700, 500), "and hooks it, so the column follows it from then on")
 
+-- Questie's real drop only queues its re-anchor (QuestieCombatQueue, then _UpdateTrackerPosition): the list keeps its
+-- place, cleared and set again by its stored corner, here BOTTOMLEFT, after the mouse up. A list at twice the host's
+-- scale is read in the column's units, and Questie's sizer, which on a BOTTOMRIGHT list moves only its left and width,
+-- is followed through OnSizeChanged.
+local q = harness.new({ hostSettings = { attached = false } })
+local qList = Questie(q)
+q.showTracker(false)
+Fire(q, "QUEST_LOG_UPDATE")
+local queued = {}
+qList.scripts.OnMouseUp = function(self)
+	self.isMoving = false
+	self:StopMovingOrSizing()
+	queued[#queued + 1] = function()
+		local left, bottom = self:GetLeft(), self:GetBottom()
+		assert(left and bottom, "Questie's queued re-anchor found no place for its list")
+		self:ClearAllPoints()
+		self:SetPoint("BOTTOMLEFT", q.parent, "BOTTOMLEFT", left, bottom)
+	end
+end
+for _, order in ipairs({ "global first", "list first" }) do
+	qList.scripts.OnMouseDown(qList)
+	qList.left = qList.left - 100
+	if order == "global first" then
+		Fire(q, "GLOBAL_MOUSE_UP")
+		qList.scripts.OnMouseUp(qList)
+	else
+		qList.scripts.OnMouseUp(qList)
+		Fire(q, "GLOBAL_MOUSE_UP")
+	end
+	table.remove(queued, 1)()
+	q.check(Under(q, qList.left, 600), "the column is under the list after Questie's queued re-anchor, " .. order)
+end
+qList.effectiveScale = 2
+qList.left, qList.top = 200, 400
+Resize(qList, 100)
+q.check(Under(q, 400, 600), "a list at another scale is read in the column's units")
+qList.effectiveScale = nil
+qList.left, qList.top = 600, 800
+Resize(qList, 200)
+qList.left, qList.width = 450, 430
+qList.scripts.OnSizeChanged(qList, 430, 200)
+q.check(Under(q, 450, 600), "Questie's sizer moving only the list's left is followed")
+
 -- Questie's ready callback finds a list built with no quest log event after it, and Left follows the list too.
 local late = harness.new({ hostSettings = { attached = false, placement = "left" }, deferReady = true })
 local callbacks = {}
@@ -224,4 +267,4 @@ lateList.scripts.OnMouseUp(lateList)
 Fire(late, "GLOBAL_MOUSE_UP")
 late.check(Left(late, 500, 800), "and it follows a drag of the list")
 
-print(("tracker_questie_spec: %d checks passed"):format(t.checks() + reloaded.checks() + late.checks()))
+print(("tracker_questie_spec: %d checks passed"):format(t.checks() + reloaded.checks() + late.checks() + q.checks()))
