@@ -105,6 +105,7 @@ local HIGHLIGHT = "Interface\\QuestFrame\\UI-QuestTitleHighlight"
 ---@field tick Texture
 ---@field arrow Texture
 ---@field divider Texture
+---@field highlight Texture
 ---@field label FontString
 
 ---@class ForeverMenuScrollFrame : ScrollFrame
