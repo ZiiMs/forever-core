@@ -1017,12 +1017,87 @@ local function LayoutModules(width, available)
 	host:MarkDirty()
 	return hasSections
 end
--- Where the column goes under the game's quest tracker: its top left corner on the tracker's last visible line, read
--- from the tracker's NineSlice, which Blizzard anchors under its last shown section, or the tracker's top while it is
--- hidden with nothing to show. Returns that x and y in the host's own units, nil before the client has placed the
--- tracker. These are reads only; nothing here writes to the tracker or hooks it.
+-- Questie's own tracker (Questie_BaseFrame) draws the quest list on UIParent at the game's tracker's place and hides
+-- the game's tracker, so with it on the column follows Questie's list instead (#866). Questie's frame is only read:
+-- nothing of ours is anchored or parented to it and none of its scripts is replaced. An anchor to it once put the list
+-- in our layout's anchor family, and Questie's drag, which reads the list's GetLeft and GetTop just before clearing its
+-- points, then found nothing and lost the list (Questie/Questie#8076, #188). Post-hooks on the list showing, hiding
+-- and resizing (a quest added or finished, a section collapsed) place the column, and nothing else. Questie drags the
+-- list from its own frame or any of its lines, with no script on the list for the drop, so the drop is heard as
+-- GLOBAL_MOUSE_UP, and the column moves only when the list has moved. Questie builds the list a few seconds after login
+-- with no event of its own, so the column looks for it at its own placements and on the quest log events that fire as
+-- Questie fills it, and hooks it the first time it is there.
+---@type fun()
+local Follow
+local questieHooked = false
+local questieList, questieLeft, questieBottom
+local questieWatch = CreateFrame("Frame")
+-- GLOBAL_MOUSE_UP fires on every click in the game, so it is registered only while Questie's list is shown, and its
+-- handler is two reads and a compare.
+local function WatchDrops(list)
+	if list:IsShown() then
+		questieLeft, questieBottom = list:GetLeft(), list:GetBottom()
+		questieWatch:RegisterEvent("GLOBAL_MOUSE_UP")
+	else
+		questieWatch:UnregisterEvent("GLOBAL_MOUSE_UP")
+	end
+end
+local function OnQuestieShown(list)
+	WatchDrops(list)
+	Follow()
+end
+local function OnQuestieResized()
+	Follow()
+end
+---@return Frame? list
+local function QuestieList()
+	local frame = questieList or rawget(_G, "Questie_BaseFrame")
+	if type(frame) ~= "table" or type(frame.IsShown) ~= "function" or type(frame.HookScript) ~= "function" then
+		return nil
+	end
+	if not questieHooked then
+		questieHooked, questieList = true, frame
+		frame:HookScript("OnShow", OnQuestieShown)
+		frame:HookScript("OnHide", OnQuestieShown)
+		frame:HookScript("OnSizeChanged", OnQuestieResized)
+		questieWatch:UnregisterAllEvents()
+		WatchDrops(frame)
+	end
+	if frame:IsShown() then
+		return frame
+	end
+end
+questieWatch:SetScript("OnEvent", function(_, event)
+	if event == "GLOBAL_MOUSE_UP" then
+		local left, bottom = questieList:GetLeft(), questieList:GetBottom()
+		if left ~= questieLeft or bottom ~= questieBottom then
+			questieLeft, questieBottom = left, bottom
+			Follow()
+		end
+	elseif QuestieList() then
+		Follow()
+	end
+end)
+questieWatch:RegisterEvent("QUEST_LOG_UPDATE")
+questieWatch:RegisterEvent("QUEST_WATCH_LIST_CHANGED")
+-- Where the column goes under the quest list: its top left corner on the list's last visible line. With Questie's
+-- tracker on that is the bottom of Questie's list. Otherwise it is the game's tracker's NineSlice, which Blizzard
+-- anchors under its last shown section, or the tracker's top while it is hidden with nothing to show. Returns that x
+-- and y in the host's own units, nil before the client has placed the list. These are reads only; nothing here writes
+-- to either list.
 ---@return number? x, number? top
 local function TrackerEdge()
+	local questie = QuestieList()
+	if questie then
+		local left, bottom = questie:GetLeft(), questie:GetBottom()
+		if not (left and bottom) then
+			return nil
+		end
+		-- The drop check compares against the place the column last followed, not the last release.
+		questieLeft, questieBottom = left, bottom
+		local scale = questie:GetEffectiveScale() / host:GetEffectiveScale()
+		return left * scale, bottom * scale
+	end
 	local edge = ObjectiveTrackerFrame.NineSlice
 	local left = ObjectiveTrackerFrame:GetLeft()
 	local trackerScale = ObjectiveTrackerFrame:GetEffectiveScale()
@@ -1041,10 +1116,19 @@ end
 local AddPlacementMenu
 -- Whether the column now sits under the quest tracker rather than at its pin to the left.
 local under = false
+-- Left of Questie's list is its top right corner on the list's top left, placed on UIParent at coordinates: a list
+-- the player dragged elsewhere is no longer at the game's tracker, and nothing of ours anchors to Questie's frame.
 local function PinLeft()
 	host:ClearAllPoints()
-	host:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPLEFT", 0, 0)
 	under = false
+	local questie = QuestieList()
+	local left, top = questie and questie:GetLeft(), questie and questie:GetTop()
+	if left and top then
+		local scale = questie:GetEffectiveScale() / host:GetEffectiveScale()
+		host:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", left * scale, top * scale)
+		return
+	end
+	host:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPLEFT", 0, 0)
 end
 -- Puts a column placed under the quest tracker on the tracker's last line when the whole column, as its last layout
 -- measured it, fits between that line and the screen's bottom, and at its pin to the left when it does not. It is one
@@ -1059,7 +1143,14 @@ local placeAgain = false
 local followed = false
 ---@param settings ForeverTrackerSettings
 local function FollowTracker(settings)
-	if settings.placement ~= "under" or (settings.x and settings.y) or Drag.Dragging() or InCombatLockdown() then
+	if (settings.x and settings.y) or Drag.Dragging() or InCombatLockdown() then
+		return
+	end
+	-- Left of Questie's list is placed at coordinates, so it follows the list as Under does.
+	if settings.placement ~= "under" then
+		if QuestieList() then
+			PinLeft()
+		end
 		return
 	end
 	-- Lock holds the place the column has, except for Under's no-room fallback: a locked column under the tracker that no
@@ -1663,7 +1754,7 @@ host:RegisterEvent("EDIT_MODE_LAYOUTS_UPDATED")
 -- again. It is not protected, nothing is anchored to it, and FollowTracker only reads the tracker. The tracker showing
 -- or hiding moves no line, so the column holds its place then until its own next layout, which places it again: a
 -- frame of ours parented to the tracker would hear it, but that adds a child to Blizzard's frame.
-local function Follow()
+Follow = function()
 	if ready then
 		FollowTracker(Settings())
 	end
@@ -1715,20 +1806,32 @@ function api.Debug()
 			frame:GetEffectiveScale()
 		)
 	end
-	return ("combat=%s shown=%s under=%s hostH=%.1f host[%s] g[%s] uiS%.2f"):format(
+	local questie = QuestieList()
+	return ("combat=%s shown=%s under=%s hostH=%.1f host[%s] g[%s] uiS%.2f questie[%s]"):format(
 		tostring(InCombatLockdown()),
 		tostring(host:IsShown()),
 		tostring(under),
 		host:GetHeight() or -1,
 		point(host),
 		geometry(host),
-		UIParent:GetEffectiveScale()
+		UIParent:GetEffectiveScale(),
+		questie and geometry(questie) or (questieHooked and "hidden" or "none")
 	)
 end
 
 EventUtil.ContinueAfterAllEvents(function()
 	ready = true
 	host:MarkDirty()
+	-- Questie builds its list in its own startup, then calls back the addons that asked once it is ready; the quest log
+	-- events stay as the fallback for a Questie without that API.
+	local questieApi = type(rawget(_G, "Questie")) == "table" and rawget(_G, "Questie").API
+	if type(questieApi) == "table" and type(questieApi.RegisterOnReady) == "function" then
+		questieApi.RegisterOnReady(function()
+			if QuestieList() then
+				Follow()
+			end
+		end)
+	end
 end, "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED")
 
 ForeverTrackerHost = api -- taint-ok: addon-owned companion tracker registry

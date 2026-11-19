@@ -208,6 +208,14 @@ function harness.new(options)
 			self.events = self.events or {}
 			self.events[event] = true
 		end
+		function f:UnregisterEvent(event)
+			if self.events then
+				self.events[event] = nil
+			end
+		end
+		function f:UnregisterAllEvents()
+			self.events = nil
+		end
 		f.SetMovable = noop
 		function f:RegisterForDrag(button)
 			self.dragButton = button
