@@ -364,14 +364,11 @@ function ns.ContextMenu(owner, generator)
 		watchedOwners[ownerFrame] = true
 	end
 	frame:ClearAllPoints()
-	-- Snapshot the owner's screen position: a tracker re-plan can move or recycle it while this menu is open.
-	local right, bottom = owner:GetRight(), owner:GetBottom()
-	if right and bottom then
-		local scale = owner:GetEffectiveScale() / frame:GetEffectiveScale()
-		frame:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", right * scale, bottom * scale - 2)
-	else
-		frame:SetPoint("TOPRIGHT", owner, "BOTTOMRIGHT", 0, -2)
-	end
+	-- Open at the cursor, as MenuUtil.CreateContextMenu does: an owner can be a whole tracker section, whose corner
+	-- sits far from the click (#850). A screen point, so a tracker re-plan that moves the owner leaves the menu put.
+	local x, y = GetCursorPosition()
+	local scale = frame:GetEffectiveScale()
+	frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x / scale, y / scale)
 	Draw(root)
 	frame:Show()
 	return root
