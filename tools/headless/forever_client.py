@@ -87,7 +87,8 @@ Waiters hold exclusive locks on numbered ticket files and acquire in arrival ord
 Serve teardown takes priority over waiters without interrupting the holder. Wait logs update the holder and queue
 position; a timeout bounds the wait without guaranteeing acquisition. `STATE_DIR/job.json` names its holder
 (pid, token, label, start) so a waiter can say who it waits for. The session
-ends `IDLE_LIMIT` (10 min) after the last job ended, or after READY when none has run yet, and never later than
+ends `IDLE_LIMIT` (60 min) after the last job ended, or after READY when none has run yet, and not while a request
+is queued or a lease is live, and never later than
 `MAX_SESSION` (3 h) from the launch; at either end it takes the job lock first, so a job in flight is never cut off.
 `job` starts a detached `serve` when none runs and reuses a ready one. `up` is `serve` in the foreground, and `run`
 is an alias for `job`. `lease` prints a token valid for its TTL without holding the lock between calls.
@@ -224,9 +225,10 @@ CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "for
 ADDON = Path(__file__).resolve().parent / "!!ForeverHeadless"
 WIDTH, HEIGHT = 1920, 1080
 # The session is shared, so the client stays up while jobs arrive instead of ending after one test. These are fixed
-# limits, not heuristics: it ends IDLE_LIMIT after the last job ended (or after READY when none has run yet), and
-# never later than MAX_SESSION from the launch. Both are checked only between jobs; a job in flight is never cut off.
-IDLE_LIMIT = 10 * 60
+# limits, not heuristics: it ends IDLE_LIMIT after the last job ended (or after READY; never while work is
+# pending), and never later than MAX_SESSION from the launch. Both are checked only between jobs; a job in flight is
+# never cut off.
+IDLE_LIMIT = 60 * 60
 MAX_SESSION = 3 * 60 * 60
 WAIT_POLL = 1.0  # how often a waiter checks the session lock, the job lock and the Wine prefix
 JOB_POLL = 0.5  # how often a job waiter checks the job lock while it waits
@@ -1290,8 +1292,12 @@ def press_play(state: dict) -> None:
         # Battle.net window, then let the startup loop inspect a fresh frame.
         x(state, "key", "--window", found.stdout.split()[0], "Escape")
         if not state.get("play_target_missing_reported"):
+            # Every retry overwrites launcher.png, so by the time anyone reads this line the file shows a later
+            # frame (often one with Play drawn). Keep the frame this report is about under its own name.
+            missed = image.with_name(f"{image.stem}-no-play{image.suffix}")
+            shutil.copyfile(image, missed)
             print(
-                f"no visible Play label recognized; inspect {image}. Retrying until the startup deadline. "
+                f"no visible Play label recognized; inspect {missed}. Retrying until the startup deadline. "
                 "For screenshot-guided launcher clicks, restart with up --manual-launcher, then use shot and click.",
                 file=sys.stderr,
                 flush=True,
@@ -3356,18 +3362,46 @@ def at_character_select(state: dict, manual_launcher: bool) -> None:
         press_play(state)
 
 
-def session_end_reason(now: float, started: float, ready: float, last_job: float) -> str | None:
+def pending_work(state: Mapping) -> str | None:
+    """What still needs this session, or None: a waiter in the job queue or a live lease of this session.
+
+    A lease holder works between verbs (building a test addon, reading a screenshot), so no job ends in that
+    time; the lease's own TTL (LEASE_MAX) bounds how long it can keep the session up.
+    """
+    if job_queue():
+        return "a request is queued"
+    directory = STATE_DIR / "leases"
+    for path in directory.glob("*.json") if directory.exists() else ():
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        expires = record.get("expires") if isinstance(record, dict) else None
+        if (
+            isinstance(expires, (int, float))
+            and expires > time.time()
+            and not record.get("ended")
+            and record.get("session") == session_identity(state)
+        ):
+            return "a lease is live"
+    return None
+
+
+def session_end_reason(
+    now: float, started: float, ready: float, last_job: float, busy: str | None = None
+) -> str | None:
     """Why the resident session should stop now, or None. Two fixed limits, checked in this order:
 
     - MAX_SESSION from the launch: the lifetime cap, whatever jobs arrive.
-    - IDLE_LIMIT since the last job ended, or since READY when none has run yet: no job is coming.
+    - IDLE_LIMIT since the last job ended, or since READY when none has run yet: no job is coming. Not while
+      `busy` names pending work (`pending_work`): a queued request or a live lease means a job is coming.
 
     `last_job` is never before `ready`: `last_job_mark` clamps it, because a mark an earlier session left says
     nothing about this one.
     """
     if now - started >= MAX_SESSION:
         return f"the {MAX_SESSION // 3600} h lifetime cap"
-    if now - last_job >= IDLE_LIMIT:
+    if busy is None and now - last_job >= IDLE_LIMIT:
         return f"{IDLE_LIMIT // 60} min without a job"
     return None
 
@@ -3584,7 +3618,9 @@ def serve(args: argparse.Namespace, after_ready=None) -> int:
                 job = job_token = None
                 continue
             last_world_check, reason = resident_world_check(state, last_world_check)
-            reason = reason or session_end_reason(time.monotonic(), launched, ready, last_job_mark(ready))
+            reason = reason or session_end_reason(
+                time.monotonic(), launched, ready, last_job_mark(ready), pending_work(state)
+            )
             if reason is None and launcher_sources(sources) != sources:
                 reason = "launcher source changed"
             if reason is None and (STATE_DIR / STOP).exists():
@@ -3608,7 +3644,7 @@ def serve(args: argparse.Namespace, after_ready=None) -> int:
                 state.pop("world_lost", None)
                 write_state(state)
             reason = ("the client left the world" if not world else None) or session_end_reason(
-                time.monotonic(), launched, ready, last_job_mark(ready)
+                time.monotonic(), launched, ready, last_job_mark(ready), pending_work(state)
             )
             if reason is None and launcher_sources(sources) != sources:
                 reason = "launcher source changed"
