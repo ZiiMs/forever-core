@@ -47,6 +47,9 @@ function Sections.Register(category, name, tooltip, newTagID)
 	return initializer
 end
 
+-- The rows already registered, by variable.
+local registeredAttach = {}
+
 -- The shared tracker's "Attach to quest tracker" row, registered here so every addon that draws in the column shows
 -- the same setting with the same words, and a player finds it in whichever addon they open (#910). On is the Under
 -- placement and off is Left, the same choice as the column's right-click Tracker position menu. The addon picks only
@@ -56,7 +59,6 @@ end
 ---@param variable string unique to the addon, such as "AdventureGuideForever_trackerAttached"
 ---@return table? setting
 ---@return table? initializer
-local registeredAttach = {}
 function Sections.RegisterTrackerAttach(category, variable)
 	local host = ns.TrackerHost
 	if type(category) ~= "table" or type(variable) ~= "string" or type(host) ~= "table" then
