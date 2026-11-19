@@ -257,6 +257,7 @@ function Draw(root)
 			-- art-ok: MenuVariants.CreateHighlight, the quest log row highlight stretched to the row as the game does.
 			highlight:SetTexture(HIGHLIGHT)
 			highlight:SetBlendMode("ADD")
+			row.highlight = highlight
 			row.indicator = row:CreateTexture(nil, "ARTWORK")
 			row.tick = row:CreateTexture(nil, "ARTWORK")
 			row.tick:SetDrawLayer("ARTWORK", 1)
@@ -294,19 +295,21 @@ function Draw(root)
 		local gap = entry.kind == "checkbox" and CHECK_GAP or (entry.kind == "radio" and RADIO_GAP or 0)
 		local tickX = entry.kind == "checkbox" and 2 or 0
 		local tickY = entry.kind == "checkbox" and 1 or 0
+		-- MenuVariants.CreateRadio sets its radio 3 units left of the row's edge; the checkbox sits on it.
+		local indicatorX = entry.kind == "radio" and -3 or 0
 		local left = 0
 		row.label:ClearAllPoints()
 		if indicatorAtlas and tickAtlas then
 			row.indicator:SetAtlas(indicatorAtlas, true)
 			row.indicator:ClearAllPoints()
-			row.indicator:SetPoint("LEFT")
+			row.indicator:SetPoint("LEFT", indicatorX, 0)
 			row.indicator:Show()
 			row.tick:SetAtlas(tickAtlas, true)
 			row.tick:ClearAllPoints()
 			row.tick:SetPoint("CENTER", row.indicator, "CENTER", tickX, tickY)
 			row.tick:SetShown(selected)
 			row.label:SetPoint("LEFT", row.indicator, "RIGHT", gap, tickY)
-			left = indicatorSize + gap
+			left = indicatorX + indicatorSize + gap
 		else
 			row.indicator:Hide()
 			row.tick:Hide()
@@ -314,11 +317,20 @@ function Draw(root)
 		end
 		local right = submenu and ARROW_SIZE or 0
 		row.arrow:SetShown(submenu)
+		-- Measured before the label's right edge is set, so the width is the whole line's, not what fit the row's last
+		-- width (a fresh row is 0 wide).
+		local textWidth = 0
+		if not divider then
+			textWidth = row.label.GetUnboundedStringWidth and row.label:GetUnboundedStringWidth() or row:GetTextWidth()
+		end
 		row.label:SetPoint("RIGHT", -right, 0)
-		local textWidth = divider and 0 or row:GetTextWidth()
 		bodyWidth = math.max(bodyWidth, math.min(left + textWidth + right + CHILD_PAD, BODY_MAX))
 		row:SetHeight(height)
-		row:SetEnabled(entry.kind ~= "title" and not divider and entry:IsEnabled())
+		local enabled = entry.kind ~= "title" and not divider and entry:IsEnabled()
+		row:SetEnabled(enabled)
+		-- As Blizzard_Menu: a title and a divider never light up, and a disabled action lights up faintly.
+		local passive = entry.kind == "title" or divider
+		row.highlight:SetAlpha(enabled and 1 or (passive and 0 or 0.4))
 		row:SetMotionScriptsWhileDisabled(true)
 		row:SetScript("OnClick", function()
 			if entry.back then

@@ -423,6 +423,7 @@ equal(popup.rows[1].tick.atlas, "common-dropdown-icon-radialtick-yellow", "a cho
 equal(popup.rows[1].tick.shown, true, "the chosen radio is marked")
 equal(popup.rows[2]:GetText(), "100%", "the other radio label carries no marker text")
 equal(popup.rows[2].tick.shown, false, "the other radio is not")
+equal(popup.rows[1].indicator.points[1][2], -3, "a radio sits 3 left of the row's edge, as MenuVariants.CreateRadio")
 popup.rows[2].scripts.OnClick(popup.rows[2])
 equal(picked, 1, "a radio hands its data to the setter")
 
@@ -589,16 +590,29 @@ local last = popup.rows[7]
 local lastBottom = 8 - last.point[3] + last:GetHeight() -- the row's offset in the body is negative
 equal(lastBottom, 8 + 20 * 6 + 13, "the last row ends after every row above it")
 equal(popup:GetHeight(), lastBottom + 15, "the frame keeps Blizzard's 15-unit bottom inset below the last row")
-check(lastBottom <= popup:GetHeight() + 3, "the last row's bottom sits inside the background")
 local highlight = last.textures[1]
 equal(highlight.layer, "HIGHLIGHT", "a row's hover is a highlight layer")
 equal(highlight.texture, "Interface\\QuestFrame\\UI-QuestTitleHighlight", "in the quest log's highlight")
 equal(highlight.blend, "ADD", "added over the background")
+equal(popup.rows[1].highlight.alpha, 0, "a title never lights up")
+equal(divider.highlight.alpha, 0, "nor a divider")
+equal(last.highlight.alpha, 1, "an action lights up fully")
 local clamp = popup.clampInsets
 check(
 	clamp[1] == -10 and clamp[2] == 10 and clamp[3] == 3 and clamp[4] == -3,
 	"the clamp keeps the background on screen"
 )
+
+-- A short menu, then a long one on the same rows: the level widens to the long label.
+ns.ContextMenu(owner, function(_, root)
+	root:CreateButton("Go", function() end)
+end)
+local narrow = popup.body:GetWidth()
+ns.ContextMenu(owner, function(_, root)
+	root:CreateButton("Complete objectives, then talk to the farmer", function() end)
+end)
+check(popup.body:GetWidth() > narrow, "a long menu after a short one widens to its label")
+equal(popup.body:GetWidth(), popup.rows[1]:GetTextWidth() + 20, "to the label plus Blizzard's 20")
 
 -- A reused row drops what its last entry drew: the divider slot becomes a checked submenu row, then a plain row.
 ns.ContextMenu(owner, function(_, root)
