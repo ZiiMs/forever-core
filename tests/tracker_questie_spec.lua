@@ -11,9 +11,14 @@ local function Under(ctx, left, line)
 		and point[4] == left
 		and point[5] == line
 end
-local function Pinned(ctx)
+-- Left of Questie's list: the column's top right corner on the list's top left, at UIParent coordinates.
+local function Left(ctx, left, top)
 	local point = ctx.host.point
-	return point[1] == "TOPRIGHT" and point[2] == ctx.native and point[3] == "TOPLEFT"
+	return point[1] == "TOPRIGHT"
+		and point[2] == ctx.parent
+		and point[3] == "BOTTOMLEFT"
+		and point[4] == left
+		and point[5] == top
 end
 -- Delivers a client event to every frame that registered it, as the client does.
 local function Fire(ctx, event)
@@ -119,7 +124,7 @@ check(Under(t, 700, 760), "and up when Questie collapses it")
 check(t.pending() == 0 and (t.first.updates or 0) + (t.second.updates or 0) == updates, "following it is not a layout")
 local height = t.host:GetHeight()
 Resize(list, 800 - height + 1)
-check(Pinned(t), "a list leaving no room under it puts the column left")
+check(Left(t, 700, 800), "a list leaving no room under it puts the column left of the list, on UIParent")
 Resize(list, 200)
 check(Under(t, 700, 600), "and room brings it back")
 
@@ -137,6 +142,17 @@ list.left, list.top = 600, 700
 list.scripts.OnMouseUp(list)
 Fire(t, "GLOBAL_MOUSE_UP")
 check(list.saved[1] == 600 and Under(t, 600, 500), "in either order")
+-- The drop compares with where the column last followed the list, not the last release: the list grows after a drop,
+-- then is dragged back to that drop's bottom.
+Resize(list, 400)
+check(Under(t, 600, 300), "the column follows the list's growth")
+list.scripts.OnMouseDown(list)
+list.top = 900
+list.scripts.OnMouseUp(list)
+Fire(t, "GLOBAL_MOUSE_UP")
+check(Under(t, 600, 500), "and a drag back to the earlier drop's bottom still moves it")
+list.top = 700
+Resize(list, 200)
 list.left = 500
 list.scripts.OnMouseDown(list)
 list.scripts.OnMouseUp(list)
@@ -163,11 +179,9 @@ for _, f in ipairs(t.frames) do
 		check(f.parent ~= list and f.createdParent ~= list, "no frame of ours is parented to it")
 	end
 end
+local allowed = { HookScript = 1, IsShown = 1, GetLeft = 1, GetTop = 1, GetBottom = 1, GetEffectiveScale = 1 }
 for name in pairs(list.reads) do
-	check(
-		({ HookScript = true, IsShown = true, GetLeft = true, GetBottom = true, GetEffectiveScale = true })[name],
-		"core only reads and post-hooks Questie's list, not " .. name
-	)
+	check(allowed[name], "core only reads and post-hooks Questie's list, not " .. name)
 end
 
 -- Combat holds the column; the layout after combat places it under the list again.
@@ -189,4 +203,25 @@ reloaded.check(Under(reloaded, 700, 600), "after a reload the first layout puts 
 Resize(reloadedList, 300)
 reloaded.check(Under(reloaded, 700, 500), "and hooks it, so the column follows it from then on")
 
-print(("tracker_questie_spec: %d checks passed"):format(t.checks() + reloaded.checks()))
+-- Questie's ready callback finds a list built with no quest log event after it, and Left follows the list too.
+local late = harness.new({ hostSettings = { attached = false, placement = "left" }, deferReady = true })
+local callbacks = {}
+late.env.Questie = { API = {
+	RegisterOnReady = function(fn)
+		callbacks[#callbacks + 1] = fn
+	end,
+} }
+late.ready()
+late.drain()
+late.check(#callbacks == 1, "the column asks Questie to call it back once Questie is ready")
+local lateList = Questie(late)
+late.showTracker(false)
+callbacks[1]()
+late.check(Left(late, 700, 800), "Questie's ready callback puts a Left column left of the list")
+lateList.left = 500
+lateList.scripts.OnMouseDown(lateList)
+lateList.scripts.OnMouseUp(lateList)
+Fire(late, "GLOBAL_MOUSE_UP")
+late.check(Left(late, 500, 800), "and it follows a drag of the list")
+
+print(("tracker_questie_spec: %d checks passed"):format(t.checks() + reloaded.checks() + late.checks()))

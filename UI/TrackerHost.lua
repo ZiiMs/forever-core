@@ -1093,6 +1093,8 @@ local function TrackerEdge()
 		if not (left and bottom) then
 			return nil
 		end
+		-- The drop check compares against the place the column last followed, not the last release.
+		questieLeft, questieBottom = left, bottom
 		local scale = questie:GetEffectiveScale() / host:GetEffectiveScale()
 		return left * scale, bottom * scale
 	end
@@ -1114,10 +1116,19 @@ end
 local AddPlacementMenu
 -- Whether the column now sits under the quest tracker rather than at its pin to the left.
 local under = false
+-- Left of Questie's list is its top right corner on the list's top left, placed on UIParent at coordinates: a list
+-- the player dragged elsewhere is no longer at the game's tracker, and nothing of ours anchors to Questie's frame.
 local function PinLeft()
 	host:ClearAllPoints()
-	host:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPLEFT", 0, 0)
 	under = false
+	local questie = QuestieList()
+	local left, top = questie and questie:GetLeft(), questie and questie:GetTop()
+	if left and top then
+		local scale = questie:GetEffectiveScale() / host:GetEffectiveScale()
+		host:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", left * scale, top * scale)
+		return
+	end
+	host:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPLEFT", 0, 0)
 end
 -- Puts a column placed under the quest tracker on the tracker's last line when the whole column, as its last layout
 -- measured it, fits between that line and the screen's bottom, and at its pin to the left when it does not. It is one
@@ -1132,7 +1143,14 @@ local placeAgain = false
 local followed = false
 ---@param settings ForeverTrackerSettings
 local function FollowTracker(settings)
-	if settings.placement ~= "under" or (settings.x and settings.y) or Drag.Dragging() or InCombatLockdown() then
+	if (settings.x and settings.y) or Drag.Dragging() or InCombatLockdown() then
+		return
+	end
+	-- Left of Questie's list is placed at coordinates, so it follows the list as Under does.
+	if settings.placement ~= "under" then
+		if QuestieList() then
+			PinLeft()
+		end
 		return
 	end
 	-- Lock holds the place the column has, except for Under's no-room fallback: a locked column under the tracker that no
@@ -1804,6 +1822,16 @@ end
 EventUtil.ContinueAfterAllEvents(function()
 	ready = true
 	host:MarkDirty()
+	-- Questie builds its list in its own startup, then calls back the addons that asked once it is ready; the quest log
+	-- events stay as the fallback for a Questie without that API.
+	local questieApi = type(rawget(_G, "Questie")) == "table" and rawget(_G, "Questie").API
+	if type(questieApi) == "table" and type(questieApi.RegisterOnReady) == "function" then
+		questieApi.RegisterOnReady(function()
+			if QuestieList() then
+				Follow()
+			end
+		end)
+	end
 end, "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED")
 
 ForeverTrackerHost = api -- taint-ok: addon-owned companion tracker registry
