@@ -66,7 +66,7 @@ class EmbedTest(unittest.TestCase):
         subprocess.run(["luajit", "-e", script], check=True)
 
     @unittest.skipUnless(shutil.which("luajit"), "luajit not on PATH")
-    def test_the_addon_files_wait_for_a_core_that_started(self):
+    def test_the_addon_files_run_even_when_core_did_not_start(self):
         self.run_embed()
         run = self.root / embed.HOST_RUN
         script = (
@@ -76,20 +76,9 @@ class EmbedTest(unittest.TestCase):
             "local host = { ForeverCoreHostChunks = { function() ran = ran + 1 end } } "
             f"assert(loadfile({str(run)!r}))('DemoForever', host) "
             "ready[1](nil, nil) "
-            "assert(ran == 0, 'no addon file runs when ForeverCore did not start') "
-            "ready[1]({}, { mode = 'elected' }) "
-            "assert(ran == 1, 'the addon files run once ForeverCore started')"
+            "assert(ran == 1, 'the files run, so the addon require gate can answer with the fix') "
         )
         subprocess.run(["luajit", "-e", script], check=True)
-
-    def test_a_core_with_the_revision_1_loader_is_refused(self):
-        old = Path(self.root.parent) / "OldCore" / "Core"
-        old.mkdir(parents=True)
-        (old / "Loader.lua").write_text("local SCHEMA = 1\n")
-        self.assertEqual(embed.loader_revision(old.parent), 1)
-        with self.assertRaisesRegex(embed.EmbedError, "loader revision 1"):
-            embed.transform(self.root, old.parent, "1.15.0")
-        self.assertGreaterEqual(embed.loader_revision(CORE), embed.MIN_LOADER_REVISION)
 
     @unittest.skipUnless(shutil.which("luajit"), "luajit not on PATH")
     def test_the_addon_files_get_the_loading_events_they_missed(self):

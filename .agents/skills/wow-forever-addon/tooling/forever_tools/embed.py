@@ -134,12 +134,10 @@ local function Deliver(missed, before)
 end
 
 local inline = true
-ForeverCoreLoader.OnReady(function(core)
-	-- No core means activation failed, and the loader already reports why once. The deferred files need core, so none
-	-- of them runs against its absence.
-	if core == nil then
-		return
-	end
+ForeverCoreLoader.OnReady(function()
+	-- The files run whether or not ForeverCore started: with no core, the addon's own require gate (Core/Require.lua)
+	-- answers its slash words and compartment entry with the line naming the fix, and every later file stops on
+	-- ns.broken, exactly as when no ForeverCore is installed at all.
 	local runInline = inline
 	local before = {}
 	for _, event in ipairs(EVENTS) do
