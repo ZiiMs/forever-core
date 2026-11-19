@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.15.2] - 2026-11-18
+
+### Added
+
+- **The Forever tracker column sits under the quest tracker.** By default the column now starts on the last line of the game's quest list and follows it as quests are accepted, completed or collapsed, without redrawing its sections. When the column no longer fits between that line and the bottom of the screen, it sits left of the quest tracker instead, and returns under it once there is room. Right-click any Forever section and pick **Tracker position** to keep it under or left of the quest tracker; dragging the column still places it anywhere, and a locked column holds the place it has, moving left only when it no longer fits under the quest list. The "Attach to quest tracker" checkbox in Forever addons' settings works again: on keeps the column under the quest tracker, off puts it left of it, and the choice stays after a reload. During combat the column holds its place and catches up when combat ends. (#850, Refs #792, #802)
+
+### Fixed
+
+- **The profession side tabs stay under the game's profession tabs.** A frame another addon places at the bottom right of the Professions window no longer pulls the SkillUp and Commissions tabs to the window's bottom or off screen. (#862, Refs cjber/skillup-forever#807)
+
+### For addon authors
+
+- `ForeverCore.TrackerHost.GetPlacement()` and `SetPlacement("under" | "left")` read and set the column's place. Setting one releases a dragged position. `SetAttached(true)` picks Under and `SetAttached(false)` picks Left. `IsAttachedToQuestTracker()` and `GetSettings().attached` are true while the column follows the quest tracker under it, undragged, and `OnAttachmentChanged` callbacks hear each change, so an existing "Attach to quest tracker" checkbox keeps working.
+
+## [1.15.1] - 2026-11-18
+
+### Fixed
+
+- **Every Forever tracker section fits its lines.** A line that gets shorter in place, such as a route's distance or a step's text, no longer leaves empty space under the section. The column also lays itself out again when Edit Mode places or moves the game's quest tracker, so text measured before then no longer clips the last line. (#827)
+
 ## [1.15.0] - 2026-11-18
 
 <!-- discord-image: docs/screenshots/tracker.png -->

@@ -212,6 +212,29 @@ local env = {
 	UIParent = region("Frame"),
 	UISpecialFrames = {},
 	menu = {},
+	cursor = { 0, 0 },
+}
+env.GetCursorPosition = function()
+	return env.cursor[1], env.cursor[2]
+end
+-- Blizzard_SharedXML's InputUtil and FrameUtil as the client has them: the cursor anchor (UIParent is not letterboxed
+-- here) and the gamepad interface's quadrant, which a spec sets as env.gamepad and env.quadrant.
+env.InputUtil = {
+	IsGamepadUIEnabled = function()
+		return env.gamepad == true
+	end,
+	AnchorRegionToCursor = function(menu, point)
+		local x, y = env.GetCursorPosition()
+		local scale = env.UIParent:GetEffectiveScale()
+		menu:ClearAllPoints()
+		menu:SetPoint(point, env.UIParent, "BOTTOMLEFT", x / scale, y / scale)
+	end,
+}
+env.FrameUtilQuadrantEnum = { BottomLeft = 1, BottomRight = 2, TopLeft = 3, TopRight = 4 }
+env.FrameUtil = {
+	GetScreenQuadrant = function()
+		return env.quadrant
+	end,
 }
 setmetatable(env, { __index = _G })
 env._G = env
@@ -314,28 +337,22 @@ popup.rows[2].scripts.OnClick(popup.rows[2])
 equal(calls, 1, "leaf executes once")
 equal(popup:IsShown(), false, "leaf closes menu")
 
--- An owner without a rect keeps the relative anchor until the client places it.
-local unplaced = env.CreateFrame("Button", nil, env.UIParent)
-unplaced.GetRight = function() end
-unplaced.GetBottom = function() end
-ns.ContextMenu(unplaced, function(_, root)
-	root:CreateButton("Unplaced")
-end)
-equal(popup.point[2], unplaced, "an owner without a rect uses the relative anchor")
-equal(popup.point[3], "BOTTOMRIGHT", "an unplaced owner keeps the bottom-right anchor")
-
--- A re-plan moves and briefly hides its owner, but the open menu stays under the cursor.
+-- The menu opens at the cursor, as MenuUtil.CreateContextMenu does: a tracker passes its whole section as the owner,
+-- whose bottom-right corner can sit far below the clicked title (#850).
 owner.right, owner.bottom, owner.scale = 300, 200, 0.625
 env.UIParent.scale = 0.8
+env.cursor = { 400, 960 }
 ns.ContextMenu(owner, function(_, root)
 	root:CreateButton("Re-plan action", function()
 		calls = calls + 1
 	end)
 end)
+equal(popup.point[1], "TOPLEFT", "the menu's top-left corner sits at the cursor")
 equal(popup.point[2], env.UIParent, "menu anchors to the screen instead of its moving owner")
 equal(popup.point[3], "BOTTOMLEFT", "menu snapshots coordinates from the screen origin")
-equal(popup.point[4], 187.5, "owner right is converted to popup effective scale")
-equal(popup.point[5], 123, "owner bottom is converted with the menu gap")
+equal(popup.point[4], 500, "cursor x is converted to popup effective scale")
+equal(popup.point[5], 1200, "cursor y is converted to popup effective scale")
+local openedPoint = { unpack(popup.point) }
 local openedRight = popup:GetRight()
 owner.right, owner.bottom = 500, 400
 owner:Hide()
@@ -343,12 +360,33 @@ owner:Show()
 drain()
 equal(popup:IsShown(), true, "a layout hide and reshow keeps the menu open")
 equal(popup:GetRight(), openedRight, "owner movement leaves the popup position unchanged")
+equal(popup.point[4] == openedPoint[4] and popup.point[5] == openedPoint[5], true, "the menu stays where it opened")
 popup.mouseOver = true
 popup.scripts.OnEvent(popup)
 equal(popup:IsShown(), true, "a click inside the stationary popup keeps its action reachable")
 popup.rows[1].scripts.OnClick(popup.rows[1])
 equal(calls, 2, "the stationary menu entry still executes")
 popup.mouseOver = false
+
+-- Under the gamepad interface a press leaves the cursor parked, so the menu opens beside the owner, toward the
+-- screen's middle, as Blizzard's context menus do there.
+env.gamepad = true
+for _, case in ipairs({
+	{ "BottomRight", "BOTTOMRIGHT", "BOTTOMLEFT" },
+	{ "BottomLeft", "BOTTOMLEFT", "BOTTOMRIGHT" },
+	{ "TopRight", "TOPRIGHT", "TOPLEFT" },
+	{ "TopLeft", "TOPLEFT", "TOPRIGHT" },
+}) do
+	env.quadrant = env.FrameUtilQuadrantEnum[case[1]]
+	ns.ContextMenu(owner, function(_, root)
+		root:CreateButton("Pad", function() end)
+	end)
+	equal(popup.point[1], case[2], case[1] .. " owner: the menu's corner")
+	equal(popup.point[2], owner, case[1] .. " owner: beside the owner, not the parked cursor")
+	equal(popup.point[3], case[3], case[1] .. " owner: the owner's facing corner")
+end
+env.gamepad, env.quadrant = nil, nil
+popup:Hide()
 
 -- The tracker's background choice is a set of radios with Blizzard's MenuUtil contract.
 local picked = 0.5
