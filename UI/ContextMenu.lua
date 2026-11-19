@@ -364,13 +364,23 @@ function ns.ContextMenu(owner, generator)
 		watchedOwners[ownerFrame] = true
 	end
 	frame:ClearAllPoints()
-	-- Snapshot the owner's screen position: a tracker re-plan can move or recycle it while this menu is open.
-	local right, bottom = owner:GetRight(), owner:GetBottom()
-	if right and bottom then
-		local scale = owner:GetEffectiveScale() / frame:GetEffectiveScale()
-		frame:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", right * scale, bottom * scale - 2)
+	-- Placed as MenuUtil.CreateContextMenu places its menus (Blizzard_Menu/Menu.lua, OpenContextMenu). With a mouse,
+	-- at the cursor: an owner can be a whole tracker section, whose corner sits far from the click (#850), and a
+	-- screen point leaves the menu put when a tracker re-plan moves the owner. Under the gamepad interface a press
+	-- leaves the cursor where it was parked, so the menu opens beside the owner, toward the screen's middle.
+	if InputUtil.IsGamepadUIEnabled() then
+		local quadrant = FrameUtil.GetScreenQuadrant(ownerFrame)
+		if quadrant == FrameUtilQuadrantEnum.BottomRight then
+			frame:SetPoint("BOTTOMRIGHT", ownerFrame, "BOTTOMLEFT")
+		elseif quadrant == FrameUtilQuadrantEnum.BottomLeft then
+			frame:SetPoint("BOTTOMLEFT", ownerFrame, "BOTTOMRIGHT")
+		elseif quadrant == FrameUtilQuadrantEnum.TopRight then
+			frame:SetPoint("TOPRIGHT", ownerFrame, "TOPLEFT")
+		else
+			frame:SetPoint("TOPLEFT", ownerFrame, "TOPRIGHT")
+		end
 	else
-		frame:SetPoint("TOPRIGHT", owner, "BOTTOMRIGHT", 0, -2)
+		InputUtil.AnchorRegionToCursor(frame, "TOPLEFT")
 	end
 	Draw(root)
 	frame:Show()
