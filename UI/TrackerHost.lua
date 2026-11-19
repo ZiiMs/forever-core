@@ -1030,43 +1030,51 @@ end
 ---@type fun()
 local Follow
 local questieHooked = false
-local questieLeft, questieBottom
+local questieList, questieLeft, questieBottom
 local questieWatch = CreateFrame("Frame")
-local function FollowQuestie()
+-- GLOBAL_MOUSE_UP fires on every click in the game, so it is registered only while Questie's list is shown, and its
+-- handler is two reads and a compare.
+local function WatchDrops(list)
+	if list:IsShown() then
+		questieLeft, questieBottom = list:GetLeft(), list:GetBottom()
+		questieWatch:RegisterEvent("GLOBAL_MOUSE_UP")
+	else
+		questieWatch:UnregisterEvent("GLOBAL_MOUSE_UP")
+	end
+end
+local function OnQuestieShown(list)
+	WatchDrops(list)
+	Follow()
+end
+local function OnQuestieResized()
 	Follow()
 end
 ---@return Frame? list
 local function QuestieList()
-	local frame = rawget(_G, "Questie_BaseFrame")
+	local frame = questieList or rawget(_G, "Questie_BaseFrame")
 	if type(frame) ~= "table" or type(frame.IsShown) ~= "function" or type(frame.HookScript) ~= "function" then
 		return nil
 	end
 	if not questieHooked then
-		questieHooked = true
-		frame:HookScript("OnShow", FollowQuestie)
-		frame:HookScript("OnHide", FollowQuestie)
-		frame:HookScript("OnSizeChanged", FollowQuestie)
+		questieHooked, questieList = true, frame
+		frame:HookScript("OnShow", OnQuestieShown)
+		frame:HookScript("OnHide", OnQuestieShown)
+		frame:HookScript("OnSizeChanged", OnQuestieResized)
 		questieWatch:UnregisterAllEvents()
-		questieWatch:RegisterEvent("GLOBAL_MOUSE_UP")
+		WatchDrops(frame)
 	end
 	if frame:IsShown() then
 		return frame
 	end
 end
 questieWatch:SetScript("OnEvent", function(_, event)
-	local list = QuestieList()
-	if event ~= "GLOBAL_MOUSE_UP" then
-		if list then
+	if event == "GLOBAL_MOUSE_UP" then
+		local left, bottom = questieList:GetLeft(), questieList:GetBottom()
+		if left ~= questieLeft or bottom ~= questieBottom then
+			questieLeft, questieBottom = left, bottom
 			Follow()
 		end
-		return
-	end
-	local left, bottom
-	if list then
-		left, bottom = list:GetLeft(), list:GetBottom()
-	end
-	if left ~= questieLeft or bottom ~= questieBottom then
-		questieLeft, questieBottom = left, bottom
+	elseif QuestieList() then
 		Follow()
 	end
 end)

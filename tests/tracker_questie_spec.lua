@@ -104,6 +104,11 @@ for _, f in ipairs(t.frames) do
 	end
 end
 check(watcher and not watcher.events.QUEST_LOG_UPDATE, "once hooked, the quest log events are dropped")
+-- GLOBAL_MOUSE_UP fires on every click, so it is registered only while the list is shown.
+list:Hide()
+check(not watcher.events.GLOBAL_MOUSE_UP, "a hidden list registers no mouse up")
+list:Show()
+check(watcher.events.GLOBAL_MOUSE_UP, "and showing it registers it again")
 
 -- A quest added grows the list, and a collapsed section shrinks it: one SetPoint, no layout.
 local updates = (t.first.updates or 0) + (t.second.updates or 0)
