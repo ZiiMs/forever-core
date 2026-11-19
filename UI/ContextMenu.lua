@@ -193,6 +193,8 @@ local function Ensure()
 	popup.rows = {}
 	popup:SetFrameStrata("FULLSCREEN_DIALOG")
 	popup:SetClampedToScreen(true)
+	-- The background reaches past the frame, so the clamp keeps that overhang on screen too.
+	popup:SetClampRectInsets(-BACKGROUND_X, BACKGROUND_X, BACKGROUND_Y, -BACKGROUND_Y)
 	popup:EnableMouse(true)
 	local background = popup:CreateTexture(nil, "BACKGROUND")
 	-- art-ok: common-dropdown-bg supplies native nine-slice margins for a resizing menu.
@@ -331,7 +333,7 @@ function Draw(root)
 			end
 		end)
 		-- A row cut at the cap cannot show its whole line, so its tooltip does.
-		local truncated = entry.tooltip == nil and left + textWidth + right > BODY_MAX - CHILD_PAD
+		local truncated = entry.tooltip == nil and left + textWidth + right > BODY_MAX
 		row:SetScript("OnEnter", function(self)
 			if entry.tooltip then
 				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")

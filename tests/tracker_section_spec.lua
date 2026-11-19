@@ -214,6 +214,25 @@ do
 	line.scripts.OnMouseUp(line, "LeftButton")
 	line.scripts.OnMouseUp(line, "RightButton")
 	check(clicks == 1, "only a left click runs onClick")
+	-- A right-click on a line inside a block opens that block's menu through the host.
+	local module = {}
+	local block = { parentModule = module }
+	local forwarded
+	line.GetParent = function()
+		return block
+	end
+	local host = t.ns.TrackerHost
+	local previous = host.HandleBlockHeaderClick
+	host.HandleBlockHeaderClick = function(m, b, button)
+		forwarded = { m, b, button }
+	end
+	line.scripts.OnMouseUp(line, "RightButton")
+	host.HandleBlockHeaderClick = previous
+	check(
+		forwarded ~= nil and forwarded[1] == module and forwarded[2] == block and forwarded[3] == "RightButton",
+		"a right-click opens the block's menu"
+	)
+	check(clicks == 1, "a right-click does not run onClick")
 	line.scripts.OnEnter(line)
 	check(tips == 1, "a hover draws the tooltip")
 	line.scripts.OnLeave(line)

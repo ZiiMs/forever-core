@@ -57,6 +57,9 @@ local function region(kind, parent)
 	function methods:SetClampedToScreen(setting)
 		self.clamped = setting
 	end
+	function methods:SetClampRectInsets(left, right, top, bottom)
+		self.clampInsets = { left, right, top, bottom }
+	end
 	function methods:EnableMouse(setting)
 		self.mouse = setting
 	end
@@ -527,6 +530,17 @@ cut.mouseOver = true
 cut.scripts.OnEnter(cut)
 equal(env.GameTooltip.title, huge, "a cut row's tooltip holds the whole text")
 
+-- A row that fits inside the cap shows all of its text, so it gets no tooltip of its own.
+local fits = string.rep("x", 83) -- 581 units: past the cap with Blizzard's 20, still inside the 600-unit row
+ns.ContextMenu(owner, function(_, root)
+	root:CreateButton(fits, function() end)
+end)
+env.GameTooltip.title = nil
+popup.rows[1].mouseOver = true
+popup.rows[1].scripts.OnEnter(popup.rows[1])
+equal(popup.rows[1]:GetWidth(), 600, "a row just under the cap stops at the cap")
+equal(env.GameTooltip.title, nil, "and, not being cut, shows no tooltip")
+
 -- An entry that already has a tooltip keeps it: the row's own text is not shown over it.
 ns.ContextMenu(owner, function(_, root)
 	local entry = root:CreateButton(huge, function() end)
@@ -580,5 +594,36 @@ local highlight = last.textures[1]
 equal(highlight.layer, "HIGHLIGHT", "a row's hover is a highlight layer")
 equal(highlight.texture, "Interface\\QuestFrame\\UI-QuestTitleHighlight", "in the quest log's highlight")
 equal(highlight.blend, "ADD", "added over the background")
+local clamp = popup.clampInsets
+check(
+	clamp[1] == -10 and clamp[2] == 10 and clamp[3] == 3 and clamp[4] == -3,
+	"the clamp keeps the background on screen"
+)
+
+-- A reused row drops what its last entry drew: the divider slot becomes a checked submenu row, then a plain row.
+ns.ContextMenu(owner, function(_, root)
+	for _ = 1, 4 do
+		root:CreateButton("Row", function() end)
+	end
+	local checked = root:CreateCheckbox("Checked", function()
+		return true
+	end, function() end)
+	checked:CreateButton("Inside", function() end)
+end)
+local reused = popup.rows[5]
+equal(reused:GetHeight(), 20, "a divider slot reused as a row is a row's height")
+equal(reused.divider.shown, false, "without the divider line")
+equal(reused.indicator.shown, true, "with its checkbox")
+equal(reused.arrow.shown, true, "and its submenu arrow")
+equal(reused:IsEnabled(), true, "and it answers the mouse")
+ns.ContextMenu(owner, function(_, root)
+	for _ = 1, 5 do
+		root:CreateButton("Plain", function() end)
+	end
+end)
+equal(reused.indicator.shown, false, "a plain row in that slot has no checkbox")
+equal(reused.tick.shown, false, "nor a tick")
+equal(reused.arrow.shown, false, "nor an arrow")
+equal(reused.divider.shown, false, "nor a divider")
 
 print(("context_menu_spec: %d checks passed"):format(checks))
