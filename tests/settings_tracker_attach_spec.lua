@@ -93,6 +93,17 @@ for _, variable in ipairs(notified) do
 end
 check(seen.TestAddon_trackerAttached and seen.OtherAddon_trackerAttached, "both rows redraw")
 
+-- A second call for the same variable hands back the first row instead of registering it again.
+local count = #registered
+local again = ns.SettingsSections.RegisterTrackerAttach(category, "TestAddon_trackerAttached")
+equal(again, setting, "the same row comes back")
+equal(#registered, count, "and nothing more is registered")
+
+-- An older adopted tracker is drawing: no row, since its attach behaves differently.
+ns.TrackerHostForeign = true
+equal(ns.SettingsSections.RegisterTrackerAttach({}, "Foreign_trackerAttached"), nil, "no row on an adopted host")
+ns.TrackerHostForeign = nil
+
 -- Missing pieces register nothing instead of erroring.
 equal(ns.SettingsSections.RegisterTrackerAttach(nil, "X"), nil, "rejects a missing category")
 equal(ns.SettingsSections.RegisterTrackerAttach({}, nil), nil, "rejects a missing variable")
@@ -141,5 +152,8 @@ box.scripts.OnClick(box)
 equal(saved.attached, false, "a click writes through SetAttached")
 host.SetAttached(true)
 equal(box.checked, true, "a change elsewhere ticks it again")
+equal(pageNs.SettingsPage.AddTrackerAttach(panel), box, "a panel gets one tick box")
+pageNs.TrackerHostForeign = true
+equal(pageNs.SettingsPage.AddTrackerAttach({ foreverL = {} }), nil, "no tick box on an adopted host")
 
 print(("settings_tracker_attach_spec: %d checks"):format(checks))

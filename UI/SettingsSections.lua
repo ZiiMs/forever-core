@@ -56,10 +56,20 @@ end
 ---@param variable string unique to the addon, such as "AdventureGuideForever_trackerAttached"
 ---@return table? setting
 ---@return table? initializer
+local registeredAttach = {}
 function Sections.RegisterTrackerAttach(category, variable)
 	local host = ns.TrackerHost
 	if type(category) ~= "table" or type(variable) ~= "string" or type(host) ~= "table" then
 		return nil
+	end
+	-- An older store build's tracker can be the one drawing (TrackerHost adopts it): its attach keeps a dragged spot
+	-- and some builds stub it, so the row would promise a move that never happens. Show no row then.
+	if ns.TrackerHostForeign then
+		return nil
+	end
+	-- Blizzard's Settings refuses a variable twice, so a second call hands back the first row.
+	if registeredAttach[variable] then
+		return registeredAttach[variable].setting, registeredAttach[variable].initializer
 	end
 	if
 		type(host.GetSettings) ~= "function"
@@ -97,5 +107,6 @@ function Sections.RegisterTrackerAttach(category, variable)
 			Settings.NotifyUpdate(variable)
 		end
 	end)
+	registeredAttach[variable] = { setting = setting, initializer = initializer }
 	return setting, initializer
 end

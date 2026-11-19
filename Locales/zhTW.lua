@@ -53,7 +53,7 @@ L["Under the quest tracker"] = "任務追蹤器下方"
 L["Left of the quest tracker"] = "任務追蹤器左側"
 L["Attach to quest tracker"] = "附著到任務追蹤器" -- mt
 L["The shared Forever tracker sits under the quest tracker when this is on, and left of it when it is off. Every Forever addon shows this same setting."] =
-	"開啟時，共用的 Forever 追蹤器位於任務追蹤器下方；關閉時位於其左側。所有 Forever 插件都顯示同一設定。" -- mt
+	"開啟時，共用的 Forever 追蹤器位於任務追蹤器下方；關閉時位於其左側。所有 Forever 附加元件都顯示同一設定。" -- mt
 L["Tracker"] = "追蹤器"
 L["Click to %s"] = "點擊 %s"
 L["Right-click for options"] = "右鍵查看選項"

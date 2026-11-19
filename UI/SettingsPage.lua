@@ -13,6 +13,7 @@ local _, ns = ...
 ---@field settingsRows? table[]
 ---@field title? FontString
 ---@field category? table
+---@field foreverAttach? CheckButton the shared tracker's attach tick box, once added
 
 ---@class ForeverSettingsPage
 local Page = {}
@@ -241,12 +242,17 @@ end
 -- The shared tracker's "Attach to quest tracker" tick box on a canvas page, the same setting and words
 -- SettingsSections.RegisterTrackerAttach puts in a native list (#910). It ticks itself again when a drag or another
 -- addon's row changes the choice.
+-- Like the native row, it shows nothing while an older adopted tracker is drawing, and a panel gets one tick box.
 ---@param panel ForeverSettingsPanel
 ---@return CheckButton?
 function Page.AddTrackerAttach(panel)
 	local host = ns.TrackerHost
+	if type(panel) ~= "table" or panel.foreverAttach then
+		return panel and panel.foreverAttach
+	end
 	if
-		type(host) ~= "table"
+		ns.TrackerHostForeign
+		or type(host) ~= "table"
 		or type(host.GetSettings) ~= "function"
 		or type(host.SetAttached) ~= "function"
 		or type(host.OnAttachmentChanged) ~= "function"
@@ -262,5 +268,6 @@ function Page.AddTrackerAttach(panel)
 	host.OnAttachmentChanged(function(attached)
 		check:SetChecked(attached == true)
 	end)
+	panel.foreverAttach = check
 	return check
 end
