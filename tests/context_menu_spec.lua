@@ -57,6 +57,9 @@ local function region(kind, parent)
 	function methods:SetClampedToScreen(setting)
 		self.clamped = setting
 	end
+	function methods:SetClampRectInsets(left, right, top, bottom)
+		self.clampInsets = { left, right, top, bottom }
+	end
 	function methods:EnableMouse(setting)
 		self.mouse = setting
 	end
@@ -157,11 +160,20 @@ local function region(kind, parent)
 	function methods:GetParent()
 		return rawget(self, "parent")
 	end
-	function methods:CreateTexture(layer)
+	function methods:CreateTexture(_, layer)
 		local texture = region("Texture", self)
 		texture.layer = layer
 		function texture.SetAtlas(texture_, atlas, useAtlasSize)
 			texture_.atlas, texture_.useAtlasSize = atlas, useAtlasSize
+		end
+		function texture.SetTexture(texture_, path)
+			texture_.texture = path
+		end
+		function texture.SetBlendMode(texture_, mode)
+			texture_.blend = mode
+		end
+		function texture.SetAlpha(texture_, alpha)
+			texture_.alpha = alpha
 		end
 		function texture.SetAllPoints(texture_)
 			texture_.allPoints = true
@@ -316,9 +328,14 @@ end)
 local popup = env.ForeverCoreContextMenu
 check(popup ~= nil, "the suite's popup is built")
 equal(popup:IsShown(), true, "owned menu opens")
-equal(popup.rows[3]:GetHeight(), 20, "compact dropdown rows")
-equal(popup.rows[3].fontString:GetText(), "First", "button uses its compact text label")
-equal(popup.rows[3].arrow.atlas, "common-dropdown-icon-next", "a submenu carries the client's expand arrow")
+equal(popup.rows[3]:GetHeight(), 20, "rows are 20 high, as MenuVariants.CreateFontString makes them")
+equal(popup.rows[3].fontString:GetText(), "First", "button uses its text label")
+equal(popup.rows[3].normalFont, "GameFontHighlight", "rows use the game menu's GameFontHighlight")
+equal(popup.rows[1].disabledFont, "GameFontNormal", "a title is the same font in gold")
+equal(popup.rows[2].disabledFont, "GameFontDisable", "a disabled row is greyed")
+local arrowPath = "Interface\\ChatFrame\\ChatFrameExpandArrow"
+equal(popup.rows[3].arrow.texture, arrowPath, "a submenu carries the client's expand arrow")
+equal(popup.rows[3].arrow.width, 16, "at its 16-unit size")
 equal(popup.rows[3].arrow.shown, true, "the submenu arrow is shown")
 equal(popup.rows[3].indicator.shown, false, "a plain submenu row carries no checkbox")
 equal(popup:GetParent(), env.UIParent, "popup escapes owner scroll clipping")
@@ -424,7 +441,7 @@ equal(checkRow.indicator.atlas, "common-dropdown-ticksquare", "a checkbox draws 
 equal(checkRow.indicator.shown, true, "the tick square is shown")
 equal(checkRow.tick.atlas, "common-dropdown-icon-checkmark-yellow", "a checked box draws the client's checkmark")
 equal(checkRow.tick.shown, false, "an unchecked box draws no checkmark")
-check(checkRow:GetWidth() >= checkRow:GetTextWidth() + 12 + 7 + 16, "the checkbox row holds its art and label")
+check(checkRow:GetWidth() >= checkRow:GetTextWidth() + 12 + 7 + 20, "the checkbox row holds its art and label")
 checkRow.scripts.OnClick(checkRow)
 equal(attached, true, "a checkbox toggle writes the setting")
 equal(popup:IsShown(), false, "a checkbox toggle closes the menu")
@@ -436,7 +453,7 @@ ns.ContextMenu(owner, function(_, root)
 end)
 local longRow = popup.rows[1]
 equal(longRow:GetText(), longSubmenu, "a submenu label carries no arrow text")
-check(longRow:GetWidth() >= longRow:GetTextWidth() + 17 + 4 + 16, "a submenu row leaves room for its arrow")
+check(longRow:GetWidth() >= longRow:GetTextWidth() + 16 + 20, "a submenu row leaves room for its arrow")
 
 -- A long level scrolls, and a level that sets its own extent scrolls past it.
 ns.ContextMenu(owner, function(_, root)
@@ -444,7 +461,7 @@ ns.ContextMenu(owner, function(_, root)
 		root:CreateButton("Entry " .. index, function() end)
 	end
 end)
-equal(popup:GetHeight() <= 420, true, "long menus fit viewport")
+equal(popup:GetHeight(), 8 + 406 + 15, "a long menu stops at the default extent inside its insets")
 equal(popup.body:GetHeight() > popup:GetHeight(), true, "long menu scrolls")
 ns.ContextMenu(owner, function(_, root)
 	root:SetScrollMode(100)
@@ -452,7 +469,7 @@ ns.ContextMenu(owner, function(_, root)
 		root:CreateButton("Entry " .. index, function() end)
 	end
 end)
-equal(popup:GetHeight(), 114, "a scrolled level stops at its extent")
+equal(popup:GetHeight(), 8 + 100 + 15, "a scrolled level stops at its extent, inside the menu's insets")
 equal(popup.scroll.ScrollBar:IsShown(), true, "and shows its scroll bar")
 
 -- An owner that hides closes its menu; a card under the map hears the panel manager instead.
@@ -495,9 +512,10 @@ ns.ContextMenu(owner, function(_, root)
 	root:CreateButton("Short", function() end)
 end)
 equal(popup.body:GetWidth() > 296, true, "the body grows past its default")
-equal(popup.body:GetWidth(), popup.rows[1]:GetWidth() + 12, "the body holds the longest row")
-equal(popup:GetWidth(), popup.body:GetWidth() + 24, "the popup leaves room for the scroll bar")
-equal(popup.rows[1]:GetWidth() + 20 >= popup.rows[1]:GetTextWidth(), true, "the longest row is not cut")
+equal(popup.body:GetWidth(), popup.rows[1]:GetTextWidth() + 20, "the body is the longest row plus Blizzard's 20")
+equal(popup.rows[2]:GetWidth(), popup.body:GetWidth(), "every row spans the level, so its highlight does")
+equal(popup:GetWidth(), popup.body:GetWidth() + 16, "the popup adds its 8-unit side insets")
+equal(popup.rows[1]:GetWidth() >= popup.rows[1]:GetTextWidth(), true, "the longest row is not cut")
 equal(popup:GetWidth() > 320, true, "the menu is wider than the old fixed width")
 
 -- A row still cut at the width cap carries its whole text in a tooltip.
@@ -506,10 +524,22 @@ ns.ContextMenu(owner, function(_, root)
 	root:CreateButton(huge, function() end)
 end)
 local cut = popup.rows[1]
+equal(cut:GetWidth(), 600, "a very long row stops at the width cap")
 equal(cut:GetTextWidth() > cut:GetWidth() - 20, true, "the row is cut at the width cap")
 cut.mouseOver = true
 cut.scripts.OnEnter(cut)
 equal(env.GameTooltip.title, huge, "a cut row's tooltip holds the whole text")
+
+-- A row that fits inside the cap shows all of its text, so it gets no tooltip of its own.
+local fits = string.rep("x", 83) -- 581 units: past the cap with Blizzard's 20, still inside the 600-unit row
+ns.ContextMenu(owner, function(_, root)
+	root:CreateButton(fits, function() end)
+end)
+env.GameTooltip.title = nil
+popup.rows[1].mouseOver = true
+popup.rows[1].scripts.OnEnter(popup.rows[1])
+equal(popup.rows[1]:GetWidth(), 600, "a row just under the cap stops at the cap")
+equal(env.GameTooltip.title, nil, "and, not being cut, shows no tooltip")
 
 -- An entry that already has a tooltip keeps it: the row's own text is not shown over it.
 ns.ContextMenu(owner, function(_, root)
@@ -520,5 +550,93 @@ ns.ContextMenu(owner, function(_, root)
 end)
 popup.rows[1].scripts.OnEnter(popup.rows[1])
 equal(env.GameTooltip.title, "Own tip", "a row with its own tooltip keeps it")
+
+-- MenuStyle1: the background reaches past the frame, and the last row ends inside it with Blizzard's 15-unit bottom
+-- inset (#875: the old popup set the background to its own edges and its last row, Tracker, sat cut off on the bottom).
+ns.ContextMenu(owner, function(_, root)
+	root:CreateTitle("Visit Saldean's Farm: Pick up 2")
+	root:CreateButton("Go", function() end)
+	root:CreateButton("Not this quest"):CreateButton("Inside", function() end)
+	root:CreateButton("End journey", function() end)
+	root:CreateDivider()
+	root:CreateCheckbox("Lock the tracker", function()
+		return true
+	end, function() end)
+	root:CreateButton("Tracker"):CreateButton("Inside", function() end)
+end)
+local background = popup.background
+equal(background.atlas, "common-dropdown-bg", "the background is the game menu's art")
+equal(background.alpha, 0.925, "at the game menu's alpha")
+local corners = {}
+for _, p in ipairs(background.points) do
+	corners[p[1]] = p
+end
+check(corners.TOPLEFT[2] == -10 and corners.TOPLEFT[3] == 3, "the background reaches 10 left and 3 up")
+check(corners.BOTTOMRIGHT[2] == 10 and corners.BOTTOMRIGHT[3] == -3, "and 10 right and 3 down")
+local scrollAt = {}
+for _, p in ipairs(popup.scroll.points) do
+	scrollAt[p[1]] = p
+end
+check(scrollAt.TOPLEFT[2] == 8 and scrollAt.TOPLEFT[3] == -8, "the rows start 8 in and 8 down")
+check(scrollAt.BOTTOMRIGHT[2] == -8 and scrollAt.BOTTOMRIGHT[3] == 15, "then 8 right, 15 up")
+local divider = popup.rows[5]
+equal(divider:GetHeight(), 13, "a divider is 13 high")
+equal(divider.shown, true, "and drawn")
+local dividerPath = "Interface\\Common\\UI-TooltipDivider-Transparent"
+equal(divider.divider.texture, dividerPath, "as the tooltip divider line")
+equal(divider:IsEnabled(), false, "and not clickable")
+local last = popup.rows[7]
+local lastBottom = 8 - last.point[3] + last:GetHeight() -- the row's offset in the body is negative
+equal(lastBottom, 8 + 20 * 6 + 13, "the last row ends after every row above it")
+equal(popup:GetHeight(), lastBottom + 15, "the frame keeps Blizzard's 15-unit bottom inset below the last row")
+local highlight = last.textures[1]
+equal(highlight.layer, "HIGHLIGHT", "a row's hover is a highlight layer")
+equal(highlight.texture, "Interface\\QuestFrame\\UI-QuestTitleHighlight", "in the quest log's highlight")
+equal(highlight.blend, "ADD", "added over the background")
+equal(popup.rows[1].highlight.alpha, 0, "a title never lights up")
+equal(divider.highlight.alpha, 0, "nor a divider")
+equal(last.highlight.alpha, 1, "an action lights up fully")
+local clamp = popup.clampInsets
+check(
+	clamp[1] == -10 and clamp[2] == 10 and clamp[3] == 3 and clamp[4] == -3,
+	"the clamp keeps the background on screen"
+)
+
+-- A short menu, then a long one on the same rows: the level widens to the long label.
+ns.ContextMenu(owner, function(_, root)
+	root:CreateButton("Go", function() end)
+end)
+local narrow = popup.body:GetWidth()
+ns.ContextMenu(owner, function(_, root)
+	root:CreateButton("Complete objectives, then talk to the farmer", function() end)
+end)
+check(popup.body:GetWidth() > narrow, "a long menu after a short one widens to its label")
+equal(popup.body:GetWidth(), popup.rows[1]:GetTextWidth() + 20, "to the label plus Blizzard's 20")
+
+-- A reused row drops what its last entry drew: the divider slot becomes a checked submenu row, then a plain row.
+ns.ContextMenu(owner, function(_, root)
+	for _ = 1, 4 do
+		root:CreateButton("Row", function() end)
+	end
+	local checked = root:CreateCheckbox("Checked", function()
+		return true
+	end, function() end)
+	checked:CreateButton("Inside", function() end)
+end)
+local reused = popup.rows[5]
+equal(reused:GetHeight(), 20, "a divider slot reused as a row is a row's height")
+equal(reused.divider.shown, false, "without the divider line")
+equal(reused.indicator.shown, true, "with its checkbox")
+equal(reused.arrow.shown, true, "and its submenu arrow")
+equal(reused:IsEnabled(), true, "and it answers the mouse")
+ns.ContextMenu(owner, function(_, root)
+	for _ = 1, 5 do
+		root:CreateButton("Plain", function() end)
+	end
+end)
+equal(reused.indicator.shown, false, "a plain row in that slot has no checkbox")
+equal(reused.tick.shown, false, "nor a tick")
+equal(reused.arrow.shown, false, "nor an arrow")
+equal(reused.divider.shown, false, "nor a divider")
 
 print(("context_menu_spec: %d checks passed"):format(checks))
