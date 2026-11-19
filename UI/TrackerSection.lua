@@ -182,8 +182,12 @@ function TrackerLine.SetInteractive(line, spec)
 			-- The line takes the mouse, so a right-click on it opens its block's menu (Lock, the section's end action)
 			-- as a click on the block's header would; otherwise the line swallows it.
 			local block = self:GetParent()
-			if block and block.parentModule then
-				ns.TrackerHost.HandleBlockHeaderClick(block.parentModule, block, button)
+			local module = block and block.parentModule
+			if module and not ns.TrackerHost.HandleBlockHeaderClick(module, block, button) then
+				-- A section without a menu contract keeps its own block click.
+				if type(module.OnBlockHeaderClick) == "function" then
+					module:OnBlockHeaderClick(block, button)
+				end
 			end
 		end
 	end)

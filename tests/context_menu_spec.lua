@@ -423,7 +423,6 @@ equal(popup.rows[1].tick.atlas, "common-dropdown-icon-radialtick-yellow", "a cho
 equal(popup.rows[1].tick.shown, true, "the chosen radio is marked")
 equal(popup.rows[2]:GetText(), "100%", "the other radio label carries no marker text")
 equal(popup.rows[2].tick.shown, false, "the other radio is not")
-equal(popup.rows[1].indicator.points[1][2], -3, "a radio sits 3 left of the row's edge, as MenuVariants.CreateRadio")
 popup.rows[2].scripts.OnClick(popup.rows[2])
 equal(picked, 1, "a radio hands its data to the setter")
 

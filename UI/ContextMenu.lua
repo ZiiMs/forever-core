@@ -295,21 +295,19 @@ function Draw(root)
 		local gap = entry.kind == "checkbox" and CHECK_GAP or (entry.kind == "radio" and RADIO_GAP or 0)
 		local tickX = entry.kind == "checkbox" and 2 or 0
 		local tickY = entry.kind == "checkbox" and 1 or 0
-		-- MenuVariants.CreateRadio sets its radio 3 units left of the row's edge; the checkbox sits on it.
-		local indicatorX = entry.kind == "radio" and -3 or 0
 		local left = 0
 		row.label:ClearAllPoints()
 		if indicatorAtlas and tickAtlas then
 			row.indicator:SetAtlas(indicatorAtlas, true)
 			row.indicator:ClearAllPoints()
-			row.indicator:SetPoint("LEFT", indicatorX, 0)
+			row.indicator:SetPoint("LEFT")
 			row.indicator:Show()
 			row.tick:SetAtlas(tickAtlas, true)
 			row.tick:ClearAllPoints()
 			row.tick:SetPoint("CENTER", row.indicator, "CENTER", tickX, tickY)
 			row.tick:SetShown(selected)
 			row.label:SetPoint("LEFT", row.indicator, "RIGHT", gap, tickY)
-			left = indicatorX + indicatorSize + gap
+			left = indicatorSize + gap
 		else
 			row.indicator:Hide()
 			row.tick:Hide()

@@ -233,6 +233,17 @@ do
 		"a right-click opens the block's menu"
 	)
 	check(clicks == 1, "a right-click does not run onClick")
+	-- A section without a menu contract gets the click through its own block handler.
+	local own
+	module.OnBlockHeaderClick = function(_, b, button)
+		own = { b, button }
+	end
+	host.HandleBlockHeaderClick = function()
+		return false
+	end
+	line.scripts.OnMouseUp(line, "RightButton")
+	host.HandleBlockHeaderClick = previous
+	check(own ~= nil and own[1] == block and own[2] == "RightButton", "a section without a contract handles it itself")
 	line.scripts.OnEnter(line)
 	check(tips == 1, "a hover draws the tooltip")
 	line.scripts.OnLeave(line)
