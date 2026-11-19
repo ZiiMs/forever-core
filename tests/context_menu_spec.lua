@@ -217,6 +217,25 @@ local env = {
 env.GetCursorPosition = function()
 	return env.cursor[1], env.cursor[2]
 end
+-- Blizzard_SharedXML's InputUtil and FrameUtil as the client has them: the cursor anchor (UIParent is not letterboxed
+-- here) and the gamepad interface's quadrant, which a spec sets as env.gamepad and env.quadrant.
+env.InputUtil = {
+	IsGamepadUIEnabled = function()
+		return env.gamepad == true
+	end,
+	AnchorRegionToCursor = function(menu, point)
+		local x, y = env.GetCursorPosition()
+		local scale = env.UIParent:GetEffectiveScale()
+		menu:ClearAllPoints()
+		menu:SetPoint(point, env.UIParent, "BOTTOMLEFT", x / scale, y / scale)
+	end,
+}
+env.FrameUtilQuadrantEnum = { BottomLeft = 1, BottomRight = 2, TopLeft = 3, TopRight = 4 }
+env.FrameUtil = {
+	GetScreenQuadrant = function()
+		return env.quadrant
+	end,
+}
 setmetatable(env, { __index = _G })
 env._G = env
 env.GameTooltip = {
@@ -348,6 +367,26 @@ equal(popup:IsShown(), true, "a click inside the stationary popup keeps its acti
 popup.rows[1].scripts.OnClick(popup.rows[1])
 equal(calls, 2, "the stationary menu entry still executes")
 popup.mouseOver = false
+
+-- Under the gamepad interface a press leaves the cursor parked, so the menu opens beside the owner, toward the
+-- screen's middle, as Blizzard's context menus do there.
+env.gamepad = true
+for _, case in ipairs({
+	{ "BottomRight", "BOTTOMRIGHT", "BOTTOMLEFT" },
+	{ "BottomLeft", "BOTTOMLEFT", "BOTTOMRIGHT" },
+	{ "TopRight", "TOPRIGHT", "TOPLEFT" },
+	{ "TopLeft", "TOPLEFT", "TOPRIGHT" },
+}) do
+	env.quadrant = env.FrameUtilQuadrantEnum[case[1]]
+	ns.ContextMenu(owner, function(_, root)
+		root:CreateButton("Pad", function() end)
+	end)
+	equal(popup.point[1], case[2], case[1] .. " owner: the menu's corner")
+	equal(popup.point[2], owner, case[1] .. " owner: beside the owner, not the parked cursor")
+	equal(popup.point[3], case[3], case[1] .. " owner: the owner's facing corner")
+end
+env.gamepad, env.quadrant = nil, nil
+popup:Hide()
 
 -- The tracker's background choice is a set of radios with Blizzard's MenuUtil contract.
 local picked = 0.5
