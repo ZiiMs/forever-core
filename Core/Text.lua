@@ -29,13 +29,7 @@ ns.Text = Text
 ---@param text? string
 ---@return string
 function Text.Fold(text)
-	local value = type(text) == "string" and text or tostring(text or "")
-	-- Already folded text (no capitals, no accented lead bytes) is returned as-is, so re-folding a cached
-	-- name costs no new string.
-	if not value:find("[A-Z\195\197]") then
-		return value
-	end
-	return (value:lower():gsub("[\195\197][\128-\191]", FOLD))
+	return (tostring(text or ""):lower():gsub("[\195\197][\128-\191]", FOLD))
 end
 
 -- Whether `word` starts a word of `folded`: at its first byte, or right after a space or punctuation, which is
