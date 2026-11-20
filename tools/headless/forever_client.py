@@ -20,7 +20,8 @@ attempts produce no game process. Update the game in Battle.net before retrying 
     forever_client.py click X Y           # left click at a point in the 1920x1080 frame (after a fresh shot)
     forever_client.py hover X Y           # move the pointer to a point in the frame (after a fresh shot)
     forever_client.py scroll X Y N        # N wheel-up ticks (zoom in) or -N wheel-down ticks, at a point
-    forever_client.py drag X1 Y1 X2 Y2    # left-button drag from one point to another (after a fresh shot)
+    forever_client.py drag X1 Y1 X2 Y2 [--button 1] [--steps N]
+                                          # press at one point, move in steps, release at the other (after a fresh shot)
     forever_client.py click X Y --hold shift [--hold ctrl]
                                           # hold shift, ctrl or alt through any pointer verb; released after
     forever_client.py key Escape          # any key xdotool names
@@ -77,9 +78,12 @@ each image's sha256, then checks the installed folder with `visual_proof --compa
 checkout. A slash command runs through `ChatEdit_SendText`, the client's own parser, so the capture follows a confirmed
 run rather than a fixed pause (#573). A flow that returns a ready check is captured once `!!DevSmoke` has polled it
 true, so a window filled in from late data is not photographed empty (#593); a check that raises or never turns true
-records its reason and fails the proof with it. A flow whose window needs a real click names it with
-`--flow-click "NAME=X,Y"`: once that reload's world screenshot has landed, `proof` clicks the point inside its own job
-and then waits for the flow's ready screenshot as any other flow does (#655). There is no default flow: ForeverCore has
+records its reason and fails the proof with it. A flow that needs real input names it with `--flow-click "NAME=X,Y"`,
+`--flow-drag "NAME=X1,Y1,X2,Y2"`, `--flow-key "NAME=ACTION"` (the key the client binds to that action, as `key
+--action` presses it) or `--flow-type "NAME=/COMMAND"` (typed into chat, so a protected command such as `/tar` runs):
+once that reload's world screenshot has landed, `proof` sends them in order inside its own job and then waits for the
+flow's ready screenshot as any other flow does, so a merchant window a key opens is still open for the capture (#655,
+#857, #860). There is no default flow: ForeverCore has
 no shared opener for an addon's update notice, so the flow is named on the command line and
 `wow-forever-addon/in-game.md` shows both. A flow's own result is read after its screenshot, and a snippet that raised
 fails the proof before any gist or `.visual-proof.json` exists (#580). Proof verifies its candidate links before
@@ -245,6 +249,11 @@ STOP_WAIT = 30 * 60
 INPUT_GAP = 1.5
 TYPE_DELAY_MS = "120"
 WHEEL_DELAY_MS = "120"
+# A drag moves in this many steps by default, at most DRAG_STEPS_MAX, pausing DRAG_STEP_DELAY seconds around each so
+# the client sees the button go down, the pointer travel over several frames, and the button come up at the end.
+DRAG_STEPS = 10
+DRAG_STEPS_MAX = 100
+DRAG_STEP_DELAY = "0.03"
 # Seconds a proof waits for a flow's screenshot, or for !!DevSmoke's failure record. Its own ready check stops at
 # 60 s; the extra 5 s only lets that failure reach SavedVariables before the proof falls back to its final reload.
 FLOW_READY_SECONDS = 65
@@ -330,6 +339,8 @@ GAME_MODIFIERS = {"SHIFT": "Shift_L", "CTRL": "Control_L", "ALT": "Alt_L"}
 BINDINGS_CACHE = "bindings.json"
 # The hold in progress, its token and keys, so a job end or the hold's watchdog releases them after a killed verb.
 HELD_KEYS = "held-keys"
+# The mouse button a drag holds down, recorded so a drag killed mid-chain is released by the next job's cleanup.
+HELD_BUTTON = "held-button"
 HOLD_MAX = 10.0  # seconds one `key --for` may hold; longer walks go through `walkto`, which re-reads as it goes
 HOLD_SLICE = 0.25  # seconds between safety checks while keys are held
 HOLD_GRACE = 2.0  # seconds past a hold's end before its watchdog releases what is still down
@@ -644,9 +655,15 @@ def x(state: Mapping, *args: str) -> None:
     require_safe(state, waiting=not state.get("ready"))
     # Under a nested Hyprland, XWayland puts the client's output at its own root offset; a point is in the output's
     # pixels, the same pixels a screenshot of it shows, so the offset is added here, once, for every absolute move.
+    # A pointer chain (one that starts with a move, as a drag does) carries no typed text, so every move in it is one.
     origin = state.get("origin")
     if origin and args and args[0] == "mousemove":
-        args = ("mousemove", str(int(args[1]) + origin[0]), str(int(args[2]) + origin[1]), *args[3:])
+        moved = list(args)
+        for index, word in enumerate(moved):
+            if word == "mousemove":
+                moved[index + 1] = str(int(moved[index + 1]) + origin[0])
+                moved[index + 2] = str(int(moved[index + 2]) + origin[1])
+        args = tuple(moved)
     subprocess.run(["xdotool", *args], env={**os.environ, "DISPLAY": state["display"]}, check=True)
 
 
@@ -700,16 +717,44 @@ def release_modifiers(display: str | None, keys: Iterable[str] = MODIFIER_KEYS.v
     return None
 
 
+def release_button(display: str | None) -> str | None:
+    """Send mouseup for the button a drag recorded as down, if any; the failure as text, or None. It never raises.
+
+    A drag stopped between its press and its release (a job timeout's SIGTERM kills its xdotool chain) leaves the
+    button down in the client, so every later pointer move would drag; the record says which button to let go.
+    """
+    record = STATE_DIR / HELD_BUTTON
+    try:
+        button = record.read_text().strip()
+    except OSError:
+        return None
+    if display and button in ("1", "3"):
+        try:
+            subprocess.run(
+                ["xdotool", "mouseup", button],
+                env={**os.environ, "DISPLAY": display},
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            return f"mouseup {button} on {display} failed: {error}"
+    record.unlink(missing_ok=True)
+    return None
+
+
 def release_session_modifiers(state: Mapping | None) -> None:
-    """Release shift, ctrl, alt and any key a verb was holding on the session's display, so no job inherits a key an
-    ended one held."""
+    """Release shift, ctrl, alt, any key a verb was holding and a dragged button on the session's display, so no job
+    inherits an input an ended one held."""
+    display = (state or {}).get("display")
     keys = list(MODIFIER_KEYS.values())
     keys += [key for key in held_record()[1] if key not in keys]
-    failure = release_modifiers((state or {}).get("display"), keys)
+    failure = release_modifiers(display, keys)
     if not failure:
         (STATE_DIR / HELD_KEYS).unlink(missing_ok=True)
-    if failure:
-        print(f"forever_client: {failure}", file=sys.stderr, flush=True)
+    for problem in (failure, release_button(display)):
+        if problem:
+            print(f"forever_client: {problem}", file=sys.stderr, flush=True)
 
 
 def held_record() -> tuple[str | None, list[str]]:
@@ -936,33 +981,6 @@ def hover(state: Mapping, px: int, py: int, hold: Sequence[str] = ()) -> None:
     if not (0 <= px < WIDTH and 0 <= py < HEIGHT):
         raise ClientError(f"({px}, {py}) is outside the {WIDTH}x{HEIGHT} frame")
     send(state, "mousemove", str(px), str(py), hold=keys)
-
-
-def drag(state: Mapping, start: tuple[int, int], end: tuple[int, int], hold: Sequence[str] = ()) -> None:
-    """Press the left button at `start`, move to `end` in steps, release: a window or slider drag, screenshot-bound.
-
-    WoW starts a drag (OnDragStart, StartMoving) only once the pointer moves with the button down, and reads the drop
-    on release, so the press, the moves and the release are separate xdotool steps with a short pause between them.
-    The button is released even when a step fails, so a failed drag never leaves the client with the button held.
-    """
-    keys = modifier_keys(hold)
-    if mark("last-shot") <= mark("last-input"):
-        raise ClientError("take a `shot` and read it first: a drag must start on addon UI in the current frame")
-    for px, py in (start, end):
-        if not (0 <= px < WIDTH and 0 <= py < HEIGHT):
-            raise ClientError(f"({px}, {py}) is outside the {WIDTH}x{HEIGHT} frame")
-    if state.get("ready"):
-        close_game_menu(state)
-    steps = [
-        (start[0] + (end[0] - start[0]) * i // DRAG_STEPS, start[1] + (end[1] - start[1]) * i // DRAG_STEPS)
-        for i in range(1, DRAG_STEPS + 1)
-    ]
-    moves = [arg for px, py in steps for arg in ("sleep", DRAG_PAUSE_S, "mousemove", str(px), str(py))]
-    try:
-        press = ("mousemove", str(start[0]), str(start[1]), "mousedown", "1")
-        send(state, *press, *moves, "sleep", DRAG_PAUSE_S, hold=keys)
-    finally:
-        x(state, "mouseup", "1")
 
 
 def scroll(state: Mapping, px: int, py: int, ticks: int, hold: Sequence[str] = ()) -> None:
@@ -1203,10 +1221,15 @@ def action_keys(state: Mapping, actions: Sequence[str]) -> list[list[str]]:
     return pressed
 
 
+def moving_action(action: str) -> bool:
+    """Whether pressing a game action moves the character, which marks the job as having moved it."""
+    return action.startswith(("MOVE", "TURN", "STRAFE", "JUMP"))
+
+
 def press_actions(state: Mapping, actions: Sequence[str], hold_for: float | None = None) -> None:
     """Press game actions by the keys the running client binds to them: tapped, or with `hold_for` held together."""
     combos = action_keys(state, actions)
-    if any(action.startswith(("MOVE", "TURN", "STRAFE", "JUMP")) for action in actions):
+    if any(map(moving_action, actions)):
         mark_moved()
     if hold_for is None:
         for combo in combos:
@@ -1645,6 +1668,54 @@ def map_point(value: float) -> float:
     if not 0 <= value <= 100:
         raise ClientError(f"map coordinates run 0 to 100, as the map shows them: refused {value:g}")
     return value / 100
+
+
+def drag_points(x1: int, y1: int, x2: int, y2: int, steps: int) -> list[tuple[int, int]]:
+    """The points a drag passes through after its start, evenly spaced, ending exactly on the end point."""
+    return [
+        (round(x1 + (x2 - x1) * step / steps), round(y1 + (y2 - y1) * step / steps)) for step in range(1, steps + 1)
+    ]
+
+
+def drag(
+    state: Mapping,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    button: str = "1",
+    steps: int = DRAG_STEPS,
+    hold: Sequence[str] = (),
+) -> None:
+    """Press a mouse button at one point, move to another in steps and release it there, as a player drags (#857).
+
+    It is the same screenshot-bound input as `click`. The button is recorded as down for the length of the chain: a
+    chain that fails or is interrupted is followed by a release here, and one whose process is killed outright is
+    released by the next job's cleanup (`release_session_modifiers`).
+    """
+    if button not in ("1", "3"):
+        raise ClientError("drag takes --button 1 (left) or 3 (right)")
+    if not 1 <= steps <= DRAG_STEPS_MAX:
+        raise ClientError(f"drag takes --steps from 1 to {DRAG_STEPS_MAX}, not {steps}")
+    keys = modifier_keys(hold)
+    if mark("last-shot") <= mark("last-input"):
+        raise ClientError("take a `shot` and read it first: a drag must aim at addon UI in the current frame")
+    for px, py in ((x1, y1), (x2, y2)):
+        if not (0 <= px < WIDTH and 0 <= py < HEIGHT):
+            raise ClientError(f"({px}, {py}) is outside the {WIDTH}x{HEIGHT} frame")
+    if state.get("ready"):
+        close_game_menu(state)
+    chain = ["mousemove", str(x1), str(y1), "mousedown", button]
+    for px, py in drag_points(x1, y1, x2, y2, steps):
+        chain += ["sleep", DRAG_STEP_DELAY, "mousemove", str(px), str(py)]
+    chain += ["sleep", DRAG_STEP_DELAY, "mouseup", button]
+    (STATE_DIR / HELD_BUTTON).write_text(button)
+    try:
+        send(state, *chain, hold=keys)
+    except BaseException:
+        release_button(state["display"])
+        raise
+    (STATE_DIR / HELD_BUTTON).unlink(missing_ok=True)
 
 
 def press(state: Mapping, keys: Sequence[str], hold_for: float | None = None) -> None:
@@ -3475,37 +3546,70 @@ def parse_flows(values: Sequence[str]) -> list[tuple[str, str]]:
     return flows
 
 
-def parse_flow_clicks(values: Sequence[str], flows: Sequence[tuple[str, str]]) -> dict[str, tuple[int, int]]:
-    """`--flow-click NAME=X,Y` entries: where a named flow clicks, in the screenshot coordinates `click` takes.
+# One input a proof flow sends: its kind and its points (click, drag) or its text (key action, typed command).
+FlowInput = tuple[str, tuple[int, ...] | str]
+# What each `--flow-<kind>` input takes after its flow's name, for the message that refuses a malformed one.
+FLOW_INPUT_FORMS = {"click": "X,Y", "drag": "X1,Y1,X2,Y2", "key": "ACTION", "type": "/COMMAND"}
 
-    A click belongs to a flow by name, so a name that matches no `--flow` is a typo the caller must hear about before
-    the build takes the client rather than a flow that quietly never clicks.
+
+def flow_points(option: str, name: str, spec: str, count: int) -> tuple[int, ...]:
+    """`count` X,Y points in screenshot coordinates, each inside the frame, as one flat tuple."""
+    form = FLOW_INPUT_FORMS[option.removeprefix("--flow-")]
+    parts = spec.split(",")
+    try:
+        if len(parts) != 2 * count:
+            raise ValueError
+        numbers = tuple(int(part.strip()) for part in parts)
+    except ValueError:
+        raise ClientError(f"{option} {name}: {form} takes {2 * count} integers, not {spec!r}") from None
+    for px, py in zip(numbers[::2], numbers[1::2], strict=True):
+        if not (0 <= px < WIDTH and 0 <= py < HEIGHT):
+            raise ClientError(f"{option} {name}: ({px}, {py}) is outside the {WIDTH}x{HEIGHT} frame")
+    return numbers
+
+
+def parse_flow_inputs(
+    values: Sequence[tuple[str, str]], flows: Sequence[tuple[str, str]]
+) -> dict[str, list[FlowInput]]:
+    """The input each named flow sends once its reload's world screenshot has landed, in command-line order.
+
+    `values` are (kind, "NAME=SPEC") pairs from `--flow-click NAME=X,Y`, `--flow-drag NAME=X1,Y1,X2,Y2`,
+    `--flow-key NAME=ACTION` and `--flow-type NAME=/COMMAND`. An input belongs to a flow by name, so a name that
+    matches no `--flow`, a point outside the frame or an action `key --action` does not press is refused here,
+    before the build takes the client, rather than a flow that quietly sends nothing.
     """
     names = [name for name, _ in flows]
-    clicks: dict[str, tuple[int, int]] = {}
-    for value in values:
-        name, separator, point = value.partition("=")
-        name = name.strip()
-        if not separator or not name or not point.strip():
-            raise ClientError(f"--flow-click takes NAME=X,Y, not {value!r}")
+    inputs: dict[str, list[FlowInput]] = {}
+    for kind, value in values:
+        option = f"--flow-{kind}"
+        name, separator, spec = value.partition("=")
+        name, spec = name.strip(), spec.strip()
+        if not separator or not name or not spec:
+            raise ClientError(f"{option} takes NAME={FLOW_INPUT_FORMS[kind]}, not {value!r}")
         if name not in names:
             known = ", ".join(names) if names else "no flow is named"
-            raise ClientError(f"--flow-click {name}: no --flow of that name ({known})")
-        try:
-            px, py = (int(part.strip()) for part in point.split(","))
-        except ValueError:
-            raise ClientError(f"--flow-click {name}: X,Y takes two integers, not {point.strip()!r}") from None
-        if not (0 <= px < WIDTH and 0 <= py < HEIGHT):
-            raise ClientError(f"--flow-click {name}: ({px}, {py}) is outside the {WIDTH}x{HEIGHT} frame")
-        clicks[name] = (px, py)
-    return clicks
+            raise ClientError(f"{option} {name}: no --flow of that name ({known})")
+        parsed: tuple[int, ...] | str
+        if kind == "click":
+            parsed = flow_points(option, name, spec, 1)
+        elif kind == "drag":
+            parsed = flow_points(option, name, spec, 2)
+        elif kind == "key":
+            if spec not in ACTIONS:
+                raise ClientError(f"{option} {name}: {spec} is not an action; it takes {', '.join(ACTIONS)}")
+            parsed = spec
+        else:
+            one_line_slash(spec)
+            parsed = spec
+        inputs.setdefault(name, []).append((kind, parsed))
+    return inputs
 
 
-def flow_record(name: str, action: str, point: tuple[int, int] | None) -> dict:
-    """One entry in the proof's `flows`: what ran, where it clicked, and that it was captured."""
+def flow_record(name: str, action: str, inputs: Sequence[FlowInput] = ()) -> dict:
+    """One entry in the proof's `flows`: what ran, the input it sent in order, and that it was captured."""
     record: dict = {"name": name, "steps": [flow_step(action)]}
-    if point:
-        record["click"] = list(point)
+    if inputs:
+        record["inputs"] = [{kind: list(value) if isinstance(value, tuple) else value} for kind, value in inputs]
     record["result"] = "pass"
     return record
 
@@ -3531,8 +3635,76 @@ def flow_capture_failure(state: Mapping, action: str, token: str, timeout: Clien
     return timeout
 
 
+def flow_key_combos(state: Mapping, inputs: Sequence[FlowInput]) -> list[list[str]]:
+    """The keysyms for a flow's `--flow-key` actions, resolved before its snippet is written and its reload runs.
+
+    Resolving may itself write an eval and reload when the client's bindings are not on disk yet (`action_bindings`),
+    which would overwrite the flow's snippet in the inbox or close the window the flow opened, so it runs first (#860).
+    """
+    actions = [value for kind, value in inputs if kind == "key" and isinstance(value, str)]
+    return action_keys(state, actions) if actions else []
+
+
+def run_flow_inputs(state: Mapping, inputs: Sequence[FlowInput], combos: Sequence[Sequence[str]]) -> None:
+    """Send a flow's inputs in order through the verbs an agent uses: `click`, `drag`, a bound key, a typed slash.
+
+    The first aimed input aims at the reload's world screenshot, which has just landed. A later one aims at a fresh
+    `shot`, since the input before it may have changed the frame, and `click` and `drag` refuse an older one.
+    """
+    keys = iter(combos)
+    sent = False
+    for kind, value in inputs:
+        if kind in ("click", "drag"):
+            if sent:
+                shot(state, STATE_DIR / "flow-input.png")
+            else:
+                (STATE_DIR / "last-shot").touch()
+        if isinstance(value, tuple):
+            if kind == "click":
+                px, py = value
+                click(state, px, py, "1")
+                print(f"clicked {px},{py}", flush=True)
+            else:
+                x1, y1, x2, y2 = value
+                drag(state, x1, y1, x2, y2)
+                print(f"dragged {x1},{y1} to {x2},{y2}", flush=True)
+        elif kind == "key":
+            combo = next(keys)
+            if moving_action(value):
+                mark_moved()
+            send(state, "key", "+".join(combo))
+            print(f"pressed {value} ({'+'.join(combo)})", flush=True)
+        else:
+            slash(state, value)
+            print(f"typed {value}", flush=True)
+        sent = True
+
+
+def world_load_shot(path: Path, timeout: float = 5.0) -> bool:
+    """Whether a client screenshot is a world load's, by the marker !!DevSmoke draws only then; waits for a file the
+    client is still writing."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return has_headless_marker(path)
+        except ClientError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+
+
+def secure_point(inputs: Sequence[FlowInput]) -> tuple[int, int] | None:
+    """The one click a secure slash flow may take, sent after its typed line settles (`run_secure_flow`)."""
+    if not inputs:
+        return None
+    kind, value = inputs[0]
+    if len(inputs) == 1 and kind == "click" and isinstance(value, tuple):
+        return value[0], value[1]
+    raise ClientError("a secure slash flow takes at most one --flow-click and no other flow input")
+
+
 def run_flow(
-    state: Mapping, action: str, point: tuple[int, int] | None = None, previous: tuple[str, str] | None = None
+    state: Mapping, action: str, inputs: Sequence[FlowInput] = (), previous: tuple[str, str] | None = None
 ) -> str:
     """Run one proof flow through !!DevSmoke: a slash command, or a Lua file.
 
@@ -3540,16 +3712,19 @@ def run_flow(
     that saves the result to disk would close the window the flow just opened (#580). A slash command runs through
     `ChatEdit_SendText`, the client's own parser, so the capture follows a confirmed run rather than a fixed pause
     (#573). The flow's ready check is polled by !!DevSmoke, whose screenshot then says the window has drawn, so the
-    capture waits for that file instead of a pause (#593). `point` is a click in screenshot coordinates that runs
-    between the reload's world screenshot and the flow's own: opening a protected window is not something a Lua
-    snippet can do, and since #648 no outside `click` can reach the client while this job holds it (#655).
+    capture waits for that file instead of a pause (#593). `inputs` are clicks, drags, bound keys and typed slash
+    commands, sent in order between the flow's reload's world screenshot and its ready one: the snippet has run by
+    then, and nothing reloads after them, so a merchant or trainer window a key opens is still open for the capture
+    (#655, #857, #860). Opening a protected window is not something a Lua snippet can do, and since #648 no outside
+    input can reach the client while this job holds it.
 
     `previous` is the earlier flow's (action, token): this flow's reload saves that flow's eval, which is checked
     straight after it, before this flow sends any input or waits on its own capture, so a failure is reported against
     the flow that caused it.
     """
     if secure_slash(action):
-        return run_secure_flow(state, action, point)
+        return run_secure_flow(state, action, secure_point(inputs))
+    combos = flow_key_combos(state, inputs)
     tool = devsmoke_eval()
     try:
         if lua_flow(action):
@@ -3575,14 +3750,16 @@ def run_flow(
     if previous:
         check_flow_eval(state, *previous, saved=True, next_flow=(action, written["token"]))
     try:
-        if point:
+        if inputs:
             world = wait_for_flow_world(before, action, written["token"], state=state)
-            # A click must aim at a screenshot newer than the last input; the flow's own world frame is that
-            # screenshot, so the proof clicks through the same `click` an agent uses instead of a second input path.
-            (STATE_DIR / "last-shot").touch()
-            click(state, point[0], point[1], "1")
-            print(f"clicked {point[0]},{point[1]} after {world.name}", flush=True)
-        wait_for_flow_ready(before, action, written["token"], state=state)
+            print(f"sending {len(inputs)} input(s) after {world.name}", flush=True)
+            run_flow_inputs(state, inputs, combos)
+        ready = wait_for_flow_ready(before, action, written["token"], state=state)
+        if inputs and world_load_shot(ready):
+            raise ClientError(
+                f"the flow {action}: its inputs reloaded the client, which closes any window they opened, so the "
+                "screenshot after them is a fresh world load rather than the flow's ready one"
+            )
     except SafetyRefusal:
         raise
     except ClientError as error:
@@ -3847,7 +4024,8 @@ def proof(args: argparse.Namespace) -> int:
 
     It runs as one job: the build and the AddOns links are the smoke's, so every borrowed slot is put back on any
     exit. The job reloads once, runs each flow and takes a screenshot after it, and the PNGs go to a new secret gist.
-    A flow named in `--flow-click` clicks its point inside this job once its reload's world screenshot has landed.
+    A flow's `--flow-click`, `--flow-drag`, `--flow-key` and `--flow-type` inputs run inside this job, in order, once
+    its reload's world screenshot has landed.
     The proof is written to `<checkout>/.visual-proof.json`; the checkout is never committed or pushed here.
     """
     flows = parse_flows(args.flow)
@@ -3856,7 +4034,7 @@ def proof(args: argparse.Namespace) -> int:
             "proof needs at least one --flow: ForeverCore has no shared opener for an addon's update notice, so name "
             'it here, such as --flow "update notice=/lf" or --flow "update notice=notice.lua"'
         )
-    clicks = parse_flow_clicks(args.flow_click, flows)
+    inputs = parse_flow_inputs(args.flow_inputs, flows)
     repo = args.repo
     if not SMOKE_REPO.fullmatch(repo):
         raise ClientError(f"--repo takes a repository name, not {repo!r}")
@@ -3910,7 +4088,7 @@ def proof(args: argparse.Namespace) -> int:
                 unread: tuple[str, str] | None = None
                 for index, (name, action) in enumerate(flows, start=1):
                     verify_links(records)
-                    flow_token = run_flow(state, action, clicks.get(name), unread)
+                    flow_token = run_flow(state, action, inputs.get(name, ()), unread)
                     verify_links(records)
                     screenshots.append(shot(state, shots_folder / f"{index}-{flow_slug(name)}.png"))
                     unread = (action, flow_token) if flow_token else None
@@ -3953,7 +4131,7 @@ def proof(args: argparse.Namespace) -> int:
         "client_build": build,
         "tested_artifact": "source-tree",
         "source_commit": commit,
-        "flows": [flow_record(name, action, clicks.get(name)) for name, action in flows],
+        "flows": [flow_record(name, action, inputs.get(name, ())) for name, action in flows],
         "images": images,
     }
     target = checkout / PROOF_FILE
@@ -5613,10 +5791,10 @@ def input_verb(state: Mapping, args: argparse.Namespace) -> int:
         click(state, args.x, args.y, args.button, args.hold)
     elif args.verb == "hover":
         hover(state, args.x, args.y, args.hold)
-    elif args.verb == "drag":
-        drag(state, (args.x1, args.y1), (args.x2, args.y2), args.hold)
     elif args.verb == "scroll":
         scroll(state, args.x, args.y, args.ticks, args.hold)
+    elif args.verb == "drag":
+        drag(state, args.x1, args.y1, args.x2, args.y2, args.button, args.steps, args.hold)
     elif args.verb == "key":
         if args.action and args.keys:
             raise ClientError("key takes key names or --action, not both")
@@ -5766,6 +5944,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif name == "drag":
             for coord in ("x1", "y1", "x2", "y2"):
                 p.add_argument(coord, type=int)
+            p.add_argument("--button", default="1", choices=("1", "3"))
+            p.add_argument(
+                "--steps",
+                type=int,
+                default=DRAG_STEPS,
+                help=f"moves between press and release, 1 to {DRAG_STEPS_MAX}",
+            )
         elif name == "scroll":
             p.add_argument("x", type=int)
             p.add_argument("y", type=int)
@@ -5849,14 +6034,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="NAME=SLASH_OR_LUA_FILE",
         help="one flow to capture: a Forever addon slash command, or a Lua file run through !!DevSmoke",
     )
-    p.add_argument(
-        "--flow-click",
-        action="append",
-        default=[],
-        metavar="NAME=X,Y",
-        help="left click X,Y (screenshot coordinates) for the flow called NAME, after its reload's world screenshot "
-        "and before its ready screenshot; a flow that needs a real click to open a protected window",
-    )
+    # Every flow input shares one list, so a flow's clicks, drags, keys and typed commands run in the order given.
+    for option, kind, metavar, text in (
+        ("--flow-click", "click", "NAME=X,Y", "left click X,Y (screenshot coordinates)"),
+        ("--flow-drag", "drag", "NAME=X1,Y1,X2,Y2", "drag with the left button from X1,Y1 to X2,Y2"),
+        (
+            "--flow-key",
+            "key",
+            "NAME=ACTION",
+            f"press the key this client binds to ACTION, as `key --action` does ({', '.join(ACTIONS)})",
+        ),
+        ("--flow-type", "type", "NAME=/COMMAND", "type a slash command into chat as a player does, such as /tar NPC"),
+    ):
+        p.add_argument(
+            option,
+            dest="flow_inputs",
+            action="append",
+            default=[],
+            type=lambda value, kind=kind: (kind, value),
+            metavar=metavar,
+            help=f"{text} for the flow called NAME, after its reload's world screenshot and before its ready "
+            "screenshot; repeat for more, all inputs run in the order given",
+        )
     p.add_argument(
         "--timeout",
         type=float,

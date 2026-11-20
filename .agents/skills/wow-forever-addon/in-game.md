@@ -88,10 +88,10 @@ them where it can:
    park or end a job inside a shop: a job that moved the character ends by walking it to the nearest outdoor park spot
    with a merchant and creatures in reach (`park`; record a new one standing there with `park --add LABEL`). With
    `autoInteract` on, INTERACTTARGET walks to an out-of-range target first. Whether the character is resting never
-   matters, so move it wherever a check needs it rather than waiting or asking. `click` and `scroll`
+   matters, so move it wherever a check needs it rather than waiting or asking. `click`, `scroll` and `drag`
    refuse until a `shot` was taken after the last input, so each input aims at what you have just read in the frame.
 2. **One job at a time.** The client is shared and stays up while jobs arrive; only one job touches it at once.
-   Every verb that touches the client (`shot`, `click`, `scroll`, `key`, `slash`, `reload`, `eval`, `errors`, `face`,
+   Every verb that touches the client (`shot`, `click`, `scroll`, `drag`, `key`, `slash`, `reload`, `eval`, `errors`, `face`,
    `walkto`, `where`, `park`) runs
    inside a job, so run a test as `job -- <script>` (or `run -- <script>`, the name it had before); the one exception
    is the `shot` and button-1 `click` that click Play for a `--manual-launcher` session, which run without the job
@@ -125,6 +125,7 @@ FOREVER_CLIENT_CALLER=in-game python3 $FC job -- ./my-test.sh   # start or reuse
 FOREVER_CLIENT_CALLER=in-game python3 $FC shot                  # prints the PNG path; read it to see the frame
 FOREVER_CLIENT_CALLER=in-game python3 $FC click 960 540         # points in the 1920x1080 frame, on UI from the last shot
 FOREVER_CLIENT_CALLER=in-game python3 $FC scroll 960 540 3      # wheel-up ticks (zoom in) or -N down, at UI from the last shot
+FOREVER_CLIENT_CALLER=in-game python3 $FC drag 1700 300 1500 400 # press, move in steps (--steps N), release: a header drag
 FOREVER_CLIENT_CALLER=in-game python3 $FC key Escape            # Return, Escape or BackSpace
 FOREVER_CLIENT_CALLER=in-game python3 $FC slash "/fgf"          # a Forever addon's own command
 FOREVER_CLIENT_CALLER=in-game python3 $FC reload                # /reload, returns once the world is back
@@ -143,6 +144,12 @@ rather than a session of its own.
 `scroll` at a point on the world map zooms it, which is how a pin that appears only at full zoom is checked. It turns
 the wheel at a point on the last shot, exactly as `click` aims there, and like `click` it is one of the verbs that
 takes the job lock for its own invocation.
+
+`drag X1 Y1 X2 Y2 [--button 1|3] [--steps N] [--hold shift]` moves a draggable frame the way a player does: it presses
+the button at the first point, moves to the second in `N` steps (10 by default) and releases there, so the frame's
+OnDragStart and OnDragStop run. It aims like `click`, at UI from the last shot, and the whole drag is one input. A
+drag that fails or is stopped mid-drag releases its button, and one killed outright is released when the next job
+starts.
 
 Driving the client across several tool calls, use a lease:
 
@@ -272,11 +279,29 @@ checked; there is no fixed settle. Name a Lua flow for anything that must wait o
 A secure slash flow (`--flow "route=/cast Cooking"`; also `/use`, `/click`, `/target`, ...: the client's secure
 words, listed as `SECURE_SLASH_WORDS` in `forever_client.py`) cannot run from Lua at all, so the proof types it into
 chat as the `slash` verb does, after the reload's world screenshot, then settles 3 s before the capture. It has no ready
-check, no eval result and no `--flow-click`. Each flow reloads first, so a later Lua flow starts from a fresh world and
+check and no eval result, and takes at most one `--flow-click`, clicked after that settle. Each flow reloads first, so a later Lua flow starts from a fresh world and
 does not continue from the window the secure flow opened.
 
 A flow whose window only a real click opens names that click with `--flow-click "NAME=X,Y"`, where `X,Y` are the same
 screenshot coordinates `click` takes:
+
+A flow that needs real input names it with these options, each `NAME=...` where `NAME` matches a `--flow`:
+
+| Option | Input |
+|---|---|
+| `--flow-click "NAME=X,Y"` | a left click, in the screenshot coordinates `click` takes |
+| `--flow-drag "NAME=X1,Y1,X2,Y2"` | a left-button drag, as the `drag` verb sends it |
+| `--flow-key "NAME=ACTION"` | the key the running client binds to a game action, as `key --action` presses it |
+| `--flow-type "NAME=/COMMAND"` | a slash command typed into chat, as `slash` types it |
+
+A flow's inputs run in the order given, inside the proof's own job, once that flow's reload has written its world
+screenshot (the flow's snippet has run by then) and before its ready screenshot is waited for. Nothing reloads between
+them and the capture, so a window they open is still open for it. An input that reloads the client (a typed
+`/reload`) would close that window, so the proof fails when the screenshot after the inputs is a world load's. A `--flow-key` binding is looked up before the
+flow's reload, because a lookup that is not cached reloads the client itself. An aimed input after the first aims at
+a fresh `shot`.
+
+For a click:
 
 ```sh
 FOREVER_CLIENT_CALLER=in-game python3 $FC proof --repo skillup-forever --ref <sha> --checkout ~/drive/proj/wow/skillup-forever \
@@ -286,9 +311,31 @@ FOREVER_CLIENT_CALLER=in-game python3 $FC proof --repo skillup-forever --ref <sh
 The click runs inside the proof's own job, once that reload's world screenshot has landed and before the flow's ready
 screenshot is waited for. Opening a profession window is a protected action no Lua snippet can take, and no outside
 `click` can reach the client while the job holds it (#648), so this is how such a window is opened and then captured
-once `professions.lua`'s ready check sees it filled. `NAME` must match a
-`--flow` name, and the proof's flow entry records the point as `click`, so the evidence says what was clicked. A flow
-with no `--flow-click` is unchanged.
+once `professions.lua`'s ready check sees it filled.
+
+A merchant, trainer or bank window opens only by interacting with the NPC, and a Lua snippet can neither target it
+(`TargetUnit` is restricted for addon code) nor interact. Type the target and press the interact key instead, from a
+spot within interact range of the NPC, with a Lua flow whose ready check waits for the window:
+
+```sh
+FOREVER_CLIENT_CALLER=in-game python3 $FC proof --repo tweaks-forever --ref <sha> --checkout ~/drive/proj/wow/tweaks-forever \
+  --flow "junk merchant=merchant.lua" \
+  --flow-type "junk merchant=/tar Thurman Mullby" --flow-key "junk merchant=INTERACTTARGET"
+```
+
+```lua
+-- merchant.lua: captured once the merchant window has opened.
+return function()
+	return MerchantFrame and MerchantFrame:IsShown()
+end
+```
+
+A drag flow is the same shape: `--flow "move header=header.lua" --flow-drag "move header=1700,300,1500,400"`, with
+`header.lua`'s ready check returning true once the frame's saved position has changed. Give every input flow a ready
+check that waits for the input's result: a slash flow is ready as soon as its command is sent, so it can be captured
+before a window its inputs open has drawn. The proof's flow entry records the inputs in order under `inputs` (such
+as `[{"type": "/tar Thurman Mullby"}, {"key": "INTERACTTARGET"}]`), so the evidence says what was sent. A flow with no
+input options is unchanged.
 
 ### From the user's checklist pass
 
