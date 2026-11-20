@@ -71,14 +71,44 @@ end
 -- The outdated-standalone notice, on screen on the next frame. Never a chat line. NoticeOnce decides whether it shows.
 local function ShowNotice(text)
 	local function show()
-		local dialogs = rawget(_G, "StaticPopupDialogs")
-		local popup = rawget(_G, "StaticPopup_Show")
-		if type(dialogs) ~= "table" or type(popup) ~= "function" then
+		local create = rawget(_G, "CreateFrame")
+		local parent = rawget(_G, "UIParent")
+		if type(create) ~= "function" or parent == nil then
 			return
 		end
-		dialogs.FOREVERCORE_OUTDATED = dialogs.FOREVERCORE_OUTDATED
-			or { text = "%s", button1 = rawget(_G, "OKAY") or "OK", timeout = 0, whileDead = true, hideOnEscape = true }
-		popup("FOREVERCORE_OUTDATED", text)
+
+		-- Mirror the default one-button StaticPopup layout from GameDialog.xml and GameDialog.lua.
+		-- Its frame and button templates register with Blizzard's dialog, focus or text-size managers.
+		local frame = create("Frame", nil, parent)
+		frame:SetFrameStrata("DIALOG")
+		frame:SetPoint("TOP", parent, "TOP", 0, -135)
+		frame:SetWidth(320)
+		frame:EnableMouse(true)
+
+		local background = frame:CreateTexture(nil, "BACKGROUND", nil, -7)
+		background:SetAtlas("UI-DialogBox-Background-Dark", true) -- art-ok: GameDialog background inset
+		background:SetPoint("TOPLEFT", 7, -7)
+		background:SetPoint("BOTTOMRIGHT", -7, 7)
+		local border = frame:CreateTexture(nil, "BACKGROUND", nil, -4)
+		border:SetAtlas("UI-DiamondDialogBox-Border", true) -- art-ok: client atlas with native slice margins
+		border:SetAllPoints()
+
+		local message = frame:CreateFontString(nil, "ARTWORK", "UserScaledFontGameHighlight")
+		message:SetPoint("TOP", 0, -16)
+		message:SetWidth(290)
+		message:SetWordWrap(true)
+		message:SetText(text)
+		frame:SetHeight(message:GetStringHeight() + 63)
+
+		-- The popup's own button uses loose legacy art and registers with the text-size manager.
+		local button = create("Button", nil, frame, "SharedButtonSmallTemplate")
+		button:SetSize(120, 22)
+		button:SetPoint("TOP", message, "BOTTOM", 0, -9)
+		button:SetText(rawget(_G, "OKAY") or "OK")
+		button:SetScript("OnClick", function()
+			frame:Hide()
+		end)
+		frame:Show()
 	end
 	local timer = rawget(_G, "C_Timer")
 	if type(timer) == "table" and type(timer.After) == "function" then
