@@ -1795,15 +1795,15 @@ class ForeverClientTest(unittest.TestCase):
                 self.assertEqual(fc.main(["eval", "probe.lua"]), 0)
         self.assertEqual(
             reload.call_args_list,
-            [mock.call(state), mock.call(state)],
-            "the reload that runs the snippet, then the one that saves its result to disk",
+            [mock.call(state)],
+            "one reload runs the snippet, whose saved result needs none, so the UI it opened stays open (#894)",
         )
         tool.write_snippet.assert_called_once_with(Path("probe.lua"), addons=client / "Interface/AddOns", capture=False)
         printed = out.getvalue()
         self.assertIn("wrote /checkout/!!DevSmokeInbox/Eval.lua from probe.lua (2 lines)", printed)
         self.assertIn("DevSmokeDB.eval: ok, ran 1763000000\na printed line\n42", printed)
 
-    def test_eval_of_two_files_takes_three_reloads_and_reports_each_ones_own_result(self):
+    def test_eval_of_two_files_takes_two_reloads_and_reports_each_ones_own_result(self):
         tool = self.eval_tool()
         tool.write_snippet.side_effect = [
             {"chunk": Path("/x/Eval.lua"), "snippet": Path("a.lua"), "lines": 1, "token": "run-a"},
@@ -1826,8 +1826,9 @@ class ForeverClientTest(unittest.TestCase):
             contextlib.redirect_stdout(out),
         ):
             self.assertEqual(fc.main(["eval", "a.lua", "b.lua"]), 1, "one snippet failed")
-        # b's reload saves a's result; only the last snippet needs a reload of its own: N + 1, not 2N.
-        self.assertEqual(order, ["reload", "clear", "reload", "clear", "run-a", "reload", "run-b"])
+        # b's reload saves a's result, and !!DevSmoke saved b's at once (#894), so b's is read with no reload of its
+        # own and the UI b opened stays open.
+        self.assertEqual(order, ["reload", "clear", "reload", "clear", "run-a", "run-b", "run-b"])
         printed = out.getvalue()
         self.assertIn("== a.lua\nDevSmokeDB.eval: failed", printed)
         self.assertIn("a.lua:1: boom", printed)
@@ -1929,11 +1930,13 @@ class ForeverClientTest(unittest.TestCase):
             with (
                 mock.patch.object(fc, "load_state", return_value=live_state(ready=1.0)),
                 mock.patch.object(fc, "devsmoke_eval", return_value=self.eval_tool()),
-                mock.patch.object(fc, "reload"),
+                mock.patch.object(fc, "reload") as reload,
+                mock.patch.object(fc, "EVAL_SAVE_WAIT", 0),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(err),
             ):
                 self.assertEqual(fc.main(["eval", "probe.lua"]), 2)
+        self.assertEqual(reload.call_count, 2, "a result that never reached disk falls back to the saving reload")
         self.assertIn("holds the run 'earlier', not this snippet's 'run-1'", err.getvalue())
         self.assertNotIn("DevSmokeDB.eval: ok", err.getvalue())
 
@@ -1953,6 +1956,31 @@ class ForeverClientTest(unittest.TestCase):
                 self.assertEqual(fc.main(["eval", "probe.lua"]), 1)
         self.assertIn("DevSmokeDB.eval: failed, ran 7\nbefore\nerror:\nboom\nstack", out.getvalue())
 
+    def test_eval_live_sends_the_snippet_as_chat_lines_without_a_reload(self):
+        client = self.state / "client"
+        with mock.patch.object(fc, "CLIENT", client):
+            self.saved_smoke('{\n\t["run"] = "run-1",\n\t["ran"] = 5,\n\t["ok"] = true,\n\t["out"] = { "live" },\n}')
+            tool = self.eval_tool()
+            tool.live_commands = mock.Mock(
+                return_value=("run-1", ["/devsmoke live run-1 1/2 AA", "/devsmoke live run-1 2/2 BB"])
+            )
+            out = io.StringIO()
+            with (
+                mock.patch.object(fc, "load_state", return_value=live_state(ready=1.0)),
+                mock.patch.object(fc, "devsmoke_eval", return_value=tool),
+                mock.patch.object(fc, "reload") as reload,
+                mock.patch.object(fc, "slash") as slash,
+                contextlib.redirect_stdout(out),
+            ):
+                self.assertEqual(fc.main(["eval", "--live", "probe.lua"]), 0)
+        reload.assert_not_called()
+        self.assertEqual(
+            [call.args[1] for call in slash.call_args_list],
+            ["/devsmoke live run-1 1/2 AA", "/devsmoke live run-1 2/2 BB"],
+        )
+        tool.write_snippet.assert_not_called()
+        self.assertIn("DevSmokeDB.eval: ok, ran 5\nlive", out.getvalue())
+
     def test_eval_refuses_a_snippet_the_compiler_rejects(self):
         class Refused(Exception):
             pass
@@ -1970,8 +1998,8 @@ class ForeverClientTest(unittest.TestCase):
         reload.assert_not_called()
         self.assertIn("probe.lua:2: 'end' expected", err.getvalue())
 
-    def test_eval_clears_the_inbox_before_the_reload_that_saves_its_result(self):
-        # The first reload runs the snippet; leaving the inbox for the second would run it again and report the second
+    def test_eval_clears_the_inbox_before_any_reload_that_saves_its_result(self):
+        # The first reload runs the snippet; leaving the inbox for a second would run it again and report the second
         # run's output, and its delayed flow screenshot could be mistaken for the saving reload's world load (#588).
         with mock.patch.object(fc, "CLIENT", self.state / "client"):
             self.saved_smoke('{\n\t["run"] = "run-1",\n\t["ran"] = 7,\n\t["ok"] = true,\n\t["out"] = { "shown" },\n}')
@@ -1984,7 +2012,7 @@ class ForeverClientTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 self.assertEqual(fc.main(["eval", "probe.lua"]), 0)
-        self.assertEqual(cleared, [False, True], "the inbox is gone before the saving reload")
+        self.assertEqual(cleared, [False], "the snippet's reload is the only one")
         clear.assert_called_once_with()
 
     def test_eval_clears_the_inbox_even_when_its_snippet_is_refused(self):
