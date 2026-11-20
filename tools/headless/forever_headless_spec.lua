@@ -140,6 +140,19 @@ run({ name = "Tester", guid = "Player-1-2-3" }, "Tester", "Player-1-2-3", false,
 assert(screenshot.count == 1, "combat character refuses readiness")
 run({ name = "Tester", guid = "Player-1-2-3" }, "Tester", "Player-1-2-3", false, false, true, screenshot)
 assert(screenshot.count == 1, "lockdown character refuses readiness")
+local reloads = 0
+_G.ReloadUI = function()
+	reloads = reloads + 1
+end
+_G.ForeverHeadlessEnrolled = nil
+run({ name = "Tester", guid = "PENDING" }, "Tester", "Player-1-2-3", false, false, false, screenshot)
+assert(screenshot.count == 1 and reloads == 1, "enrolment refuses readiness and reloads to save the GUID")
+assert(_G.ForeverHeadlessEnrolled == "Player-1-2-3", "enrolment records the GUID")
+run({ name = "Tester", guid = "PENDING" }, "Tester", "Player-1-2-3", false, false, false, screenshot)
+assert(screenshot.count == 1 and reloads == 1, "a recorded GUID is not reloaded again")
+_G.ForeverHeadlessEnrolled = nil
+run({ name = "Other", guid = "PENDING" }, "Tester", "Player-1-2-3", false, false, false, screenshot)
+assert(_G.ForeverHeadlessEnrolled == nil and reloads == 1, "enrolment never records another character")
 print("forever headless: identity handshake pass")
 
 run(nil, "Tester", "Player-1-2-3", nil, nil, nil, screenshot)

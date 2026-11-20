@@ -35,7 +35,19 @@ local function safeCharacter()
 	if type(name) ~= "string" or name == "" or type(guid) ~= "string" or guid == "" then
 		return false, "player identity unavailable"
 	end
-	if name ~= SAFE_CHARACTER.name or guid ~= SAFE_CHARACTER.guid then
+	if name ~= SAFE_CHARACTER.name then
+		return false, "unexpected player identity"
+	end
+	-- Enrolment (`forever_client enroll`): the owner approved this name but its GUID is not known yet. Record it and
+	-- reload so the client writes SavedVariables to disk, then refuse readiness; no other verb runs on this session.
+	if SAFE_CHARACTER.guid == "PENDING" then
+		if _G.ForeverHeadlessEnrolled ~= guid then
+			_G.ForeverHeadlessEnrolled = guid
+			_G.ReloadUI()
+		end
+		return false, "enrolment recorded the GUID"
+	end
+	if guid ~= SAFE_CHARACTER.guid then
 		return false, "unexpected player identity"
 	end
 	local dead, combat = safety()
