@@ -5958,9 +5958,11 @@ class FakeWorld:
     """A character on a 1000 by 1000 yard map with walls: turn keys turn it, the forward key runs it, a jump clears a
     low wall. Movement verbs see it only through the motion row's values, as they see the client."""
 
-    def __init__(self, x, y, facing, walls=(), low=(), turn_rate=math.pi, indoors=lambda x, y: False):
+    def __init__(self, x, y, facing, walls=(), low=(), turn_rate=math.pi, indoors=lambda x, y: False, slide=False):
         self.x, self.y, self.facing, self.map, self.size = x, y, facing, 1453, 1000
         self.walls, self.low, self.turn_rate, self.indoors = list(walls), list(low), turn_rate, indoors
+        # Off, a blocked step does not move at all; on, it slides along the wall as the client does.
+        self.slide = slide
         self.held: list[tuple[tuple[str, ...], float]] = []
         self.target = None
 
@@ -6008,8 +6010,19 @@ class FakeWorld:
             yards = fc.RUN_SPEED * seconds
             end = (self.x - math.sin(self.facing) * yards, self.y - math.cos(self.facing) * yards)
             walls = self.walls + ([] if "JUMP" in actions else self.low)
-            if not any(self.crosses((self.x, self.y), end, box) for box in walls):
-                self.x, self.y = end
+            if not self.slide:
+                if not any(self.crosses((self.x, self.y), end, box) for box in walls):
+                    self.x, self.y = end
+                return
+            # The client moves in small ticks: a blocked tick slides along the wall with whichever part of it runs
+            # parallel, and the next tick tries the full heading again.
+            dx, dy = (end[0] - self.x) / 40, (end[1] - self.y) / 40
+            for _ in range(40):
+                for move in ((dx, dy), (dx, 0), (0, dy)):
+                    ahead = (self.x + move[0], self.y + move[1])
+                    if not any(self.crosses((self.x, self.y), ahead, box) for box in walls):
+                        self.x, self.y = ahead
+                        break
 
 
 class MovementTest(unittest.TestCase):
@@ -6067,6 +6080,31 @@ class MovementTest(unittest.TestCase):
             fc.walkto({}, 0.5, 0.48)
         walks = sum("MOVEFORWARD" in actions for actions, _ in world.held)
         self.assertLessEqual(walks, fc.STUCK_STEPS * 3 + 1 + 2 * fc.ESCAPE_STEPS * 2, "bounded, not a loop")
+
+    def test_walkto_follows_a_wall_from_a_corner_instead_of_rocking_between_two_spots(self):
+        # #923: a long wall across the line with a corner just west of the player. Going round it on the west side
+        # is blocked at once; the walker must keep to the east side until the wall ends, not step back west each
+        # time a step toward the wall regains the yards the step aside cost.
+        walls = [(420, 495, 560, 497), (496, 497, 498, 530)]
+        world = self.world(502, 500, 0.0, walls=walls, slide=True)
+        fc.walkto({}, 0.5, 0.40)
+        self.assertLessEqual(math.hypot(world.x - 500, world.y - 400), fc.WALK_TOLERANCE)
+
+    def test_walkto_tries_the_other_side_with_the_steps_to_walk_back(self):
+        # The first side's end is far off and the other's near the first contact: the second side first walks back
+        # over the first side's steps, so it must not run out of steps on the way.
+        world = self.world(500, 500, 0.0, walls=[(300, 495, 530, 497)], slide=True)
+        fc.walkto({}, 0.5, 0.40)
+        self.assertLessEqual(math.hypot(world.x - 500, world.y - 400), fc.WALK_TOLERANCE)
+
+    def test_walkto_gives_up_once_both_sides_of_a_wall_are_spent(self):
+        # A wall too long to get round: once both sides are spent, it reports stuck rather than walking on until
+        # the step limit or the time budget ends the walk.
+        world = self.world(500, 500, 0.0, walls=[(0, 495, 1000, 497)], slide=True)
+        with self.assertRaisesRegex(fc.ClientError, r"stuck \(no way round\)"):
+            fc.walkto({}, 0.5, 0.40)
+        walks = sum("MOVEFORWARD" in actions for actions, _ in world.held)
+        self.assertLessEqual(walks, fc.STUCK_STEPS * 3 + 1 + 2 * fc.ESCAPE_STEPS * 3, "bounded, not a loop")
 
     def test_walkto_sliding_along_a_wall_without_closing_in_counts_as_stuck(self):
         # A long wall across the line: each step slides sideways a little but never gets nearer than the best so far.

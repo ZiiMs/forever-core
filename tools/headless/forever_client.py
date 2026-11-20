@@ -1237,12 +1237,14 @@ WALK_BUDGET = 240.0  # seconds a walk may take before it reports where it got to
 STUCK_PROGRESS = 0.3  # yards a step must gain, or it counts toward stuck
 STUCK_STEPS = 2
 # A blocked straight line (a shop counter between the player and the point): follow the obstacle to one side, stepping
-# at ESCAPE_ANGLE off the line and trying the line again after every step, then to the other side. The client gives no
+# at ESCAPE_ANGLE off the line and probing the line after every step, then to the other side. The client gives no
 # collision geometry, so following the obstacle is how a walker without a map gets round it; it is bounded and
 # reports what it tried.
 ESCAPE_ANGLE = math.radians(80)
 ESCAPE_STEP = 1.0
-ESCAPE_STEPS = 12  # steps along the obstacle on each side
+ESCAPE_STEPS = 20  # steps along the obstacle on each side, about 100 yd with the straight probes between
+ESCAPE_PROBE = 0.5  # seconds of the straight step after each step aside: short, as a blocked one slides back
+ESCAPE_REVISIT = 2.0  # yards: going round again from within this of an earlier start is a loop
 MOVED_MARK = "moved"
 PARK_FAILED_CODE = 3
 PARK_SPOTS = CONFIG.parent / "park.json"
@@ -1416,7 +1418,10 @@ class Walk:
         self.deadline = time.monotonic() + budget
         self.blocked: list[int] = []
         self.steps = 0
+        self.side = 1  # the side of the line go_round tries first: the one that last got round
+        self.rounds: list[tuple[Mapping, float]] = []  # where each go_round began, and the nearest the walk had been
         self.motion = read_motion(state)
+        self.nearest = self.distance()
         self.map = self.motion["map"] if map_id is None else map_id
         self.check(self.motion)
 
@@ -1432,6 +1437,7 @@ class Walk:
     def read(self, motion: dict) -> dict:
         self.check(motion)
         self.motion = motion
+        self.nearest = min(self.nearest, self.distance())
         return motion
 
     def step(self, seconds: float | None = None, *, jump: bool = False, heading: float | None = None) -> float:
@@ -1457,19 +1463,50 @@ class Walk:
             f"blocked toward {', '.join(f'{angle} deg' for angle in seen) or 'nothing measured'} (0 north, 90 west)"
         )
 
-    def go_round(self) -> bool:
-        """Follow the obstacle across the line, one side then the other, until a straight step gains ground."""
-        for side in (1, -1):
-            for _ in range(ESCAPE_STEPS):
+    def go_round(self, best: float) -> bool:
+        """Follow the obstacle on one side, then the other, until the walk beats `best` (its nearest since the last
+        detour) or a straight step toward the point runs free past the line where the obstacle stopped the walk (a free
+        step that starts from a step away from the obstacle has not got round it). It keeps to the side that last got
+        round: starting each time from the same side swings the walker back and forth across a corner between two spots
+        (#923). Starting again where an earlier detour began, with no nearer point reached since, is a loop."""
+        here = self.motion
+        if any(yards_between(here, spot) < ESCAPE_REVISIT and self.nearest >= nearest for spot, nearest in self.rounds):
+            return False
+        self.rounds.append((here, self.nearest))
+        line = heading_to(here, self.x, self.y)[0]
+        budget = ESCAPE_STEPS
+        for side in (self.side, -self.side):
+            taken = 0
+            while taken < budget and self.step_aside(side):
+                taken += 1
                 start = self.motion
-                aside = (heading_to(start, self.x, self.y)[0] + side * ESCAPE_ANGLE) % (2 * math.pi)
-                self.step(ESCAPE_STEP, heading=aside)
-                if yards_between(self.motion, start) < STUCK_PROGRESS:
-                    self.blocked.append(round(math.degrees(aside)) % 360)
-                    break
-                if self.step() >= STUCK_PROGRESS:
+                heading = heading_to(start, self.x, self.y)[0]
+                # Never past the point: a probe that overshoots it can end outside the arrival tolerance.
+                probe = min(ESCAPE_PROBE, self.distance() / RUN_SPEED)
+                self.step(probe, heading=heading)
+                past = self.forward(here, line) >= STUCK_PROGRESS
+                if self.distance() <= best - STUCK_PROGRESS or (
+                    past and self.forward(start, heading) >= 0.8 * RUN_SPEED * probe
+                ):
+                    self.side = side
                     return True
-                self.blocked.append(round(math.degrees(heading_to(self.motion, self.x, self.y)[0])) % 360)
+                self.blocked.append(round(math.degrees(heading)) % 360)
+            budget = ESCAPE_STEPS + taken  # the other side first walks back over the steps this one took
+        return False
+
+    def forward(self, start: Mapping, heading: float) -> float:
+        """Yards the player now stands from `start` along `heading`."""
+        moved, yards = heading_to(start, self.motion["x"], self.motion["y"])
+        return yards * math.cos(moved - heading)
+
+    def step_aside(self, side: int) -> bool:
+        """One step off the line on `side`; False when it does not move."""
+        start = self.motion
+        aside = (heading_to(start, self.x, self.y)[0] + side * ESCAPE_ANGLE) % (2 * math.pi)
+        self.step(ESCAPE_STEP, heading=aside)
+        if yards_between(self.motion, start) >= STUCK_PROGRESS:
+            return True
+        self.blocked.append(round(math.degrees(aside)) % 360)
         return False
 
 
@@ -1506,9 +1543,11 @@ def walkto(
         if not jumped:
             jumped = True
             walk.step(0.8, jump=True)
-        elif not walk.go_round():
+            best = min(best, walk.distance())
+        elif walk.go_round(best):
+            best = walk.distance()  # round the obstacle: progress counts from here, even if the way round led away
+        else:
             raise ClientError(walk.stuck("no way round"))
-        best = min(best, walk.distance())
     if walk.distance() <= tolerance:
         return walk.motion
     raise ClientError(walk.stuck(f"{WALK_STEPS} steps"))
