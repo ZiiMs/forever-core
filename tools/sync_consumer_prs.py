@@ -164,6 +164,17 @@ def git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     return run(["git", *args], cwd=root, check=check)
 
 
+def graphql_error_types(body: str) -> set[str] | None:
+    """The errors[].type values of a GraphQL response body, or None when it carries no error list."""
+    try:
+        errors = json.loads(body).get("errors")
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    if not isinstance(errors, list) or not errors:
+        return None
+    return {error.get("type") for error in errors if isinstance(error, dict)}
+
+
 def gh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     # Include headers on API calls so rate-limit decisions use the response, never error-message matching.
     command = ["gh", *args, "--include"] if args and args[0] == "api" else ["gh", *args]
@@ -181,13 +192,18 @@ def gh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
             }
             result = subprocess.CompletedProcess(result.args, result.returncode, body, result.stderr)
         delay = None
-        if result.returncode and status in (403, 429):
+        # GraphQL reports a rate limit as status 200 or 403 with a RATE_LIMITED error, often without retry-after;
+        # any other GraphQL error (FORBIDDEN, NOT_FOUND) is final whatever its headers say.
+        types = graphql_error_types(result.stdout) if args[1:2] == ("graphql",) else None
+        limited = status == 429 or (types is not None and "RATE_LIMITED" in types)
+        if result.returncode and (limited or (status == 403 and types is None)):
             try:
                 if "retry-after" in headers:
                     delay = max(0, float(headers["retry-after"]))
                 elif headers.get("x-ratelimit-remaining") == "0":
                     delay = max(0, float(headers["x-ratelimit-reset"]) - time.time()) + 1
-                elif status == 429:
+                elif limited:
+                    # GitHub's guidance with no retry-after: wait at least a minute, backing off exponentially.
                     delay = 60 * 2**attempt
             except (KeyError, ValueError):
                 delay = None
