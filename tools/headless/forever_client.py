@@ -5947,30 +5947,28 @@ ENROL_GUID = "PENDING"
 def enroll(args) -> int:
     """Record the approved character's GUID in the launch config, for a name the owner approved with guid PENDING.
 
-    The headless addon checks only the name for such a character, saves `UnitGUID("player")` and reloads to flush it,
-    then refuses readiness, so the session ends without any job running on it (forever-core#978).
+    The headless addon checks only the name for such a character, shows `UnitGUID("player")` large and refuses
+    readiness, so the session ends without any job running on it. The GUID is read from that last frame; a misread
+    cannot admit another character, since every later session needs this exact name and GUID (forever-core#978).
     """
     launch = json.loads(CONFIG.read_text())
     character = character_config(launch)
     if character["guid"] != ENROL_GUID:
         raise ClientError(f"{CONFIG} character.guid is already set: enroll only fills a guid of {ENROL_GUID!r}")
+    frame = STATE_DIR / "failed.png"
+    frame.unlink(missing_ok=True)
     try:
         up(args)
-    except SafetyRefusal:
+    except ClientError:
         pass
-    finally:
-        down()
-    folder = account_folder()
-    files = [path for path in saved_variables("!!ForeverHeadless") if folder is None or folder in path.parents]
-    lua = load_tool("forever_errors", Path(__file__).resolve().parents[1] / "forever_errors.py")
-    for path in sorted(files, key=lambda candidate: candidate.stat().st_mtime, reverse=True):
-        guid = lua.load_lua(path).get("ForeverHeadlessEnrolled")
-        if isinstance(guid, str) and re.fullmatch(r"Player-\d+-[0-9A-F]{8}", guid):
-            launch["character"]["guid"] = guid
-            CONFIG.write_text(json.dumps(launch, indent=2) + "\n")
-            print(f"forever_client: {character['name']} enrolled as {guid} in {CONFIG}")
-            return 0
-    raise ClientError(f"no GUID was recorded for {character['name']}: check the character list shows that name once")
+    words = " ".join(word[0] for word in ocr_words(frame, psm=11)) if frame.exists() else ""
+    found = sorted(set(re.findall(r"Player-\d+-[0-9A-F]{8}", words)))
+    if len(found) != 1:
+        raise ClientError(f"read {len(found)} GUIDs for {character['name']} from {frame}: {found}")
+    launch["character"]["guid"] = found[0]
+    CONFIG.write_text(json.dumps(launch, indent=2) + "\n")
+    print(f"forever_client: {character['name']} enrolled as {found[0]} in {CONFIG}; the next up verifies it")
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

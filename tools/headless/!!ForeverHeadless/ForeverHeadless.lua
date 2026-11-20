@@ -38,14 +38,17 @@ local function safeCharacter()
 	if name ~= SAFE_CHARACTER.name then
 		return false, "unexpected player identity"
 	end
-	-- Enrolment (`forever_client enroll`): the owner approved this name but its GUID is not known yet. Record it and
-	-- reload so the client writes SavedVariables to disk, then refuse readiness; no other verb runs on this session.
+	-- Enrolment (`forever_client enroll`): the owner approved this name but its GUID is not known yet. Show the GUID
+	-- large for the tool to read from the last frame, and refuse readiness so no other verb runs on this session.
+	-- A misread GUID cannot admit another character: the next session's check needs this exact name and GUID.
 	if SAFE_CHARACTER.guid == "PENDING" then
-		if _G.ForeverHeadlessEnrolled ~= guid then
-			_G.ForeverHeadlessEnrolled = guid
-			_G.ReloadUI()
-		end
-		return false, "enrolment recorded the GUID"
+		local holder = CreateFrame("Frame", nil, UIParent)
+		holder:SetFrameStrata("TOOLTIP")
+		holder:SetAllPoints()
+		local text = holder:CreateFontString(nil, "OVERLAY", "GameFontHighlightHuge")
+		text:SetPoint("CENTER")
+		text:SetText(guid)
+		return false, "enrolment: GUID shown"
 	end
 	if guid ~= SAFE_CHARACTER.guid then
 		return false, "unexpected player identity"
