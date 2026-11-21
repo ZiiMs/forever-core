@@ -618,8 +618,11 @@ equal(#DevSmokeDB.runs, runsBefore, "another /forever command does not start a r
 equal(foreverCalls[#foreverCalls].message, "other", "the original handler gets the same words")
 equal(foreverCalls[#foreverCalls].second, "extra", "the original handler gets the same arguments")
 local savesBeforeRun = saves
+local sequenceBefore = DevSmokeDB.sequence
 SlashCmdList.FOREVERCORE("selftest")
 equal(#DevSmokeDB.runs, runsBefore + 1, "/forever selftest starts a run")
+equal(latest().run, sequenceBefore + 1, "each run takes the next sequence number")
+equal(DevSmokeDB.sequence, sequenceBefore + 1, "the sequence is kept beside the runs")
 equal(latest().finished, nil, "a run still stepping is not marked finished")
 drain()
 run = latest()

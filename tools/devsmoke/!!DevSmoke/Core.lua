@@ -161,7 +161,10 @@ local function begin()
 		runs = {}
 		DevSmokeDB.runs = runs
 	end
-	local entry = { started = time(), build = select(4, GetBuildInfo()), results = {} }
+	-- `started` is to the second, so a reader cannot tell this run from the one before it by time alone: each run
+	-- takes the next number, and a reader that saw the last number before typing the command waits for a higher one.
+	DevSmokeDB.sequence = (tonumber(DevSmokeDB.sequence) or 0) + 1
+	local entry = { run = DevSmokeDB.sequence, started = time(), build = select(4, GetBuildInfo()), results = {} }
 	runs[#runs + 1] = entry
 	while #runs > MAX_RUNS do
 		table.remove(runs, 1)

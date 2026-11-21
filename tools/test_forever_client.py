@@ -31,6 +31,8 @@ sys.modules["forever_client"] = fc
 SPEC.loader.exec_module(fc)
 REAL_REQUIRE_SAFE = fc.require_safe
 REAL_SELFTEST_RUN = fc.selftest_run
+REAL_SELFTEST_SEQUENCE = fc.selftest_sequence
+REAL_GITHUB_TOKEN = fc.github_token_from_gh
 REAL_RELEASE_MODIFIERS = fc.release_modifiers
 
 
@@ -2727,8 +2729,10 @@ class SmokeTest(unittest.TestCase):
         self.state = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.enterContext(mock.patch.object(fc, "STATE_DIR", self.state))
         # The run !!DevSmoke saves once `/forever selftest` finishes: one surface, passing.
-        self.selftest = {"started": 3, "finished": True, "results": {1: {"surface": "Tracker", "ok": True}}}
-        self.enterContext(mock.patch.object(fc, "selftest_run", side_effect=lambda _since: self.selftest))
+        self.selftest = {"run": 1, "started": 3, "finished": True, "results": {1: {"surface": "Tracker", "ok": True}}}
+        self.enterContext(mock.patch.object(fc, "selftest_sequence", return_value=0))
+        self.enterContext(mock.patch.object(fc, "selftest_run", side_effect=lambda _after: self.selftest))
+        self.token = self.enterContext(mock.patch.object(fc, "github_token_from_gh"))
         self.client = self.state / "client"
         self.addons = self.client / "Interface/AddOns"
         self.addons.mkdir(parents=True)
@@ -2897,11 +2901,11 @@ class SmokeTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(fc.subprocess, "run", return_value=login):
             os.environ.pop("GH_TOKEN", None)
             os.environ.pop("GITHUB_TOKEN", None)
-            fc.github_token_from_gh()
+            REAL_GITHUB_TOKEN()
             self.assertEqual(os.environ["GH_TOKEN"], "gho_login")
         with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "ci"}), mock.patch.object(fc.subprocess, "run") as run:
             os.environ.pop("GH_TOKEN", None)
-            fc.github_token_from_gh()
+            REAL_GITHUB_TOKEN()
             run.assert_not_called()
             self.assertNotIn("GH_TOKEN", os.environ)
 
@@ -2936,11 +2940,15 @@ class SmokeTest(unittest.TestCase):
                     [("LegacyForever", self.released_folder)],
                 ),
             )
+        # A proof reads the released builds through this same call, so it needs the `gh` login as much as a smoke.
+        self.token.assert_called_once_with()
+        self.token.reset_mock()
         with mock.patch.object(fc, "released_consumers_tool", side_effect=AssertionError("no release download")):
             self.assertEqual(
                 fc.smoke_folders("legacy-forever", [("LegacyForever", self.build)]),
                 ([("LegacyForever", self.build)], []),
             )
+        self.token.assert_not_called()
 
     def test_the_smoke_folders_unpack_the_released_builds_into_a_smoke_private_folder(self):
         core = self.state / "core"
@@ -3038,22 +3046,39 @@ class SmokeTest(unittest.TestCase):
         ):
             fc.run_selftest({"started": 3.0})
 
-    def test_the_selftest_reads_only_a_finished_run_from_this_job(self):
+    def test_the_selftest_reads_only_a_finished_run_numbered_past_the_last_one(self):
         saved = self.state / "DevSmoke.lua"
         with (
             mock.patch.object(fc, "saved_variables", return_value=[saved]),
             mock.patch.object(fc, "selftest_run", REAL_SELFTEST_RUN),
+            mock.patch.object(fc, "selftest_sequence", REAL_SELFTEST_SEQUENCE),
         ):
-            saved.write_text("DevSmokeDB = { runs = { { started = 5, results = {} } } }\n", encoding="utf-8")
-            self.assertIsNone(fc.selftest_run(3.0), "still running")
-            saved.write_text("DevSmokeDB = { runs = { { started = 2, finished = true } } }\n", encoding="utf-8")
-            self.assertIsNone(fc.selftest_run(3.0), "an earlier job's run")
+            with mock.patch.object(fc, "saved_variables", return_value=[]):
+                self.assertEqual(fc.selftest_sequence(), 0, "no saved runs yet")
+            saved.write_text("DevSmokeDB = { sequence = 4, runs = { { run = 4, started = 5 } } }\n", encoding="utf-8")
+            self.assertEqual(fc.selftest_sequence(), 4)
+            saved.write_text("DevSmokeDB = { runs = { { run = 5, started = 5, results = {} } } }\n", encoding="utf-8")
+            self.assertIsNone(fc.selftest_run(4), "still running")
+            # A run saved in the same second the job started is still the earlier run: only its number tells them apart.
             saved.write_text(
-                "DevSmokeDB = { runs = { { started = 5, finished = true,"
+                "DevSmokeDB = { runs = { { run = 4, started = 9, finished = true } } }\n", encoding="utf-8"
+            )
+            self.assertIsNone(fc.selftest_run(4), "the run before this command")
+            saved.write_text(
+                "DevSmokeDB = { runs = { { run = 5, started = 5, finished = true,"
                 ' results = { { surface = "Tracker", ok = true } } } } }\n',
                 encoding="utf-8",
             )
-            self.assertEqual(fc.selftest_run(3.0)["finished"], True)
+            self.assertEqual(fc.selftest_run(4)["finished"], True)
+
+    def test_the_selftest_waits_for_the_run_after_the_one_saved_before_typing(self):
+        with (
+            mock.patch.object(fc, "selftest_sequence", return_value=7),
+            mock.patch.object(fc, "slash"),
+            mock.patch.object(fc, "selftest_run", return_value=self.selftest) as read,
+        ):
+            self.assertEqual(fc.run_selftest({"started": 3.0}), {"surfaces": 1, "failed": []})
+        read.assert_called_once_with(7)
 
     def test_the_startup_check_asks_after_every_released_folder(self):
         source = fc.registration_source(["LegacyForever", "TweaksForever"])

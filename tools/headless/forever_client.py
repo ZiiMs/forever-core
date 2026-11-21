@@ -3188,24 +3188,36 @@ def smoke_counts(state: Mapping, folders: Sequence[tuple[str, Path]]) -> dict[st
     return counts
 
 
-def selftest_run(since: float) -> dict | None:
-    """The `/forever selftest` run !!DevSmoke saved since `since`, once it finished or was skipped; None before then.
+def saved_devsmoke() -> dict:
+    """!!DevSmoke's saved variables from the newest file that parses, or an empty table when there is none yet."""
+    lua = load_tool("forever_errors", Path(__file__).resolve().parents[1] / "forever_errors.py")
+    for path in sorted(saved_variables("!!DevSmoke"), key=lambda candidate: candidate.stat().st_mtime, reverse=True):
+        try:
+            smoke = lua.load_lua(path).get("DevSmokeDB")
+        except (OSError, lua.LuaSyntaxError):
+            continue
+        if isinstance(smoke, dict):
+            return smoke
+    return {}
+
+
+def selftest_sequence() -> int:
+    """The number !!DevSmoke gave its last saved run, 0 before its first; the next run takes a higher one."""
+    sequence = saved_devsmoke().get("sequence")
+    return sequence if isinstance(sequence, int) and not isinstance(sequence, bool) else 0
+
+
+def selftest_run(after: int) -> dict | None:
+    """The `/forever selftest` run !!DevSmoke numbered after `after`, once it finished or was skipped; None before then.
 
     !!DevSmoke steps through the surfaces on a timer and saves the run when it marks it finished, so the record on disk
     is complete without a reload, which would cut the run short. A file the client is still writing reads as not yet.
     """
-    lua = load_tool("forever_errors", Path(__file__).resolve().parents[1] / "forever_errors.py")
-    for path in sorted(saved_variables("!!DevSmoke"), key=lambda candidate: candidate.stat().st_mtime, reverse=True):
-        try:
-            variables = lua.load_lua(path)
-        except (OSError, lua.LuaSyntaxError):
-            continue
-        smoke = variables.get("DevSmokeDB")
-        runs = _ordered(smoke.get("runs")) if isinstance(smoke, dict) else []
-        entry = runs[-1] if runs and isinstance(runs[-1], dict) else None
-        started = entry.get("started") if entry else None
-        if isinstance(started, (int, float)) and started >= int(since):
-            return entry if entry.get("finished") is True or entry.get("result") else None
+    runs = _ordered(saved_devsmoke().get("runs"))
+    entry = runs[-1] if runs and isinstance(runs[-1], dict) else None
+    number = entry.get("run") if entry else None
+    if isinstance(number, int) and not isinstance(number, bool) and number > after:
+        return entry if entry.get("finished") is True or entry.get("result") else None
     return None
 
 
@@ -3216,9 +3228,11 @@ def run_selftest(state: Mapping) -> dict:
     `errors --addon` reads: the run itself is the only place a failed surface shows. A run that was skipped (in combat)
     or never finished leaves no verdict, so it is a `ClientError`.
     """
+    # The reload before this saved every earlier run, so the run this command starts is the first numbered past it.
+    after = selftest_sequence()
     slash(state, "/forever selftest")
     deadline = time.monotonic() + SELFTEST_LIMIT
-    while (entry := selftest_run(state["started"])) is None:
+    while (entry := selftest_run(after)) is None:
         if time.monotonic() >= deadline:
             raise ClientError(f"/forever selftest saved no finished run within {SELFTEST_LIMIT} s")
         time.sleep(WAIT_POLL)
@@ -3395,6 +3409,7 @@ def smoke_folders(
     folders = list(folders)
     if repo != CORE_REPO:
         return folders, []
+    github_token_from_gh()
     tool = released_consumers_tool()
     try:
         released = tool.released_folders(BUILD_ROOT / "forever-core-smoke-released")
@@ -3510,7 +3525,6 @@ def smoke(args: argparse.Namespace) -> int:
         raise ClientError(f"no checkout of {repo} in {WORKSPACE}")
     commit = resolve_commit(root, args.ref)
     post = not args.no_post
-    github_token_from_gh()
     recover_links()
     busy = foreign_client()
     if busy:
