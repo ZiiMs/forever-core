@@ -155,6 +155,7 @@ import shutil
 import signal
 import socket
 import stat
+import string
 import struct
 import subprocess
 import sys
@@ -354,6 +355,7 @@ HOLD_SLICE = 0.25  # seconds between safety checks while keys are held
 HOLD_GRACE = 2.0  # seconds past a hold's end before its watchdog releases what is still down
 # Keys that move the character on the client's default bindings: a raw hold of one marks the job as having moved it.
 MOVEMENT_KEYSYMS = {"w", "a", "s", "d", "q", "e", "space", "Up", "Down", "Left", "Right"}
+CHAT_FOCUS_POLLS = 30  # 0.1 s strip reads after a Return before the next key: the frame lags on a loaded machine
 MENU_CLOSE_TRIES = 2  # Escape presses to close a Game Menu left open; one closes it, the second covers a dropped key
 # The game's own window title: the character-select nudge sends Return only to it, never to the launcher, whose
 # focused Play button a Return would press again.
@@ -1920,12 +1922,16 @@ def focus_chat(state: Mapping) -> None:
     for key in (None, "Return", "Escape", "Return"):
         if key:
             send(state, "key", key)
-            time.sleep(0.1)
-        ui = client_ui(state)
-        if not ui["world"]:
-            raise ClientError("slash needs the world: there is no chat box at the login or character screen")
-        if ui["chat"]:
-            return
+        # A loaded machine can take well over 0.1 s to draw the frame whose strip shows the focus a Return gave, so a
+        # Return is followed by polls of the strip rather than one early read that types nothing.
+        for poll in range(CHAT_FOCUS_POLLS if key == "Return" else 1):
+            if key or poll:
+                time.sleep(0.1)
+            ui = client_ui(state)
+            if not ui["world"]:
+                raise ClientError("slash needs the world: there is no chat box at the login or character screen")
+            if ui["chat"]:
+                return
     raise ClientError("slash refused: the chat edit box did not acquire focus")
 
 
@@ -2153,11 +2159,18 @@ def write_ppm(path: Path, rows: Sequence[bytes], channels: int, box: tuple[int, 
     path.write_bytes(data)
 
 
-def write_pgm_channel(path: Path, width: int, height: int, channels: int, rows: Sequence[bytes], channel: int) -> None:
-    """Write one PNG channel as grayscale for OCR of colored game labels."""
-    data = bytearray(f"P5\n{width} {height}\n255\n".encode())
+def write_pgm_channel(
+    path: Path, width: int, height: int, channels: int, rows: Sequence[bytes], channel: int, scale: int = 1
+) -> None:
+    """Write one PNG channel as grayscale for OCR of colored game labels, each pixel repeated `scale` times a side.
+
+    The client's small list text reads unreliably at its drawn size (a highlighted row is missed, `Hel` reads as
+    `VHeI`), and tesseract reads it at twice the size; a caller divides the boxes it gets back by the same scale.
+    """
+    data = bytearray(f"P5\n{width * scale} {height * scale}\n255\n".encode())
     for row in rows:
-        data.extend(255 - value for value in row[channel::channels])
+        line = bytes(255 - value for value in row[channel::channels] for _ in range(scale))
+        data.extend(line * scale)
     path.write_bytes(data)
 
 
@@ -2308,12 +2321,22 @@ def press_play(state: dict) -> None:
     (STATE_DIR / "last-input").touch()
 
 
+CHARACTER_SELECT_OCR_SCALE = 2
+
+
+def unscaled(word: tuple) -> tuple:
+    """An OCR word read at CHARACTER_SELECT_OCR_SCALE, its box back in screenshot pixels."""
+    text, confidence, left, top, width, height, *rest = word
+    scale = CHARACTER_SELECT_OCR_SCALE
+    return (text, confidence, left // scale, top // scale, width // scale, height // scale, *rest)
+
+
 def enter_world_targets(image: Path) -> list[tuple[int, int, int, int, float]]:
     """Find exact Enter World labels in a character-select screenshot."""
     width, height, channels, rows = png_pixels(image)
     channel = STATE_DIR / "character-select-green.pgm"
-    write_pgm_channel(channel, width, height, channels, rows, 1)
-    words = [word for word in ocr_words_with_lines(channel, psm=6) if word[1] >= 0]
+    write_pgm_channel(channel, width, height, channels, rows, 1, CHARACTER_SELECT_OCR_SCALE)
+    words = [unscaled(word) for word in ocr_words_with_lines(channel, psm=6) if word[1] >= 0]
     combined = [word for word in words if word[0].casefold().replace(" ", "") == "enterworld"]
     targets = [(word[2], word[3], word[4], word[5], word[1]) for word in combined]
     for enter in words:
@@ -2333,12 +2356,14 @@ def character_targets(image: Path, name: str) -> list[tuple[int, int, int, int]]
     """Every OCR word on the character list that reads exactly as the approved character's name."""
     width, height, channels, rows = png_pixels(image)
     channel = STATE_DIR / "character-select-green.pgm"
-    write_pgm_channel(channel, width, height, channels, rows, 1)
+    write_pgm_channel(channel, width, height, channels, rows, 1, CHARACTER_SELECT_OCR_SCALE)
     wanted = name.strip().casefold()
+    # The list is the panel on the right; the selected character's name is also drawn large under the model, and
+    # that copy is not a list entry to click. Frame-edge art can join a word as stray punctuation (`._Hel`).
     return [
         (word[2], word[3], word[4], word[5])
-        for word in ocr_words_with_lines(channel, psm=11)
-        if word[1] >= 0 and word[0].strip().casefold() == wanted
+        for word in map(unscaled, ocr_words_with_lines(channel, psm=11))
+        if word[1] >= 0 and word[2] > width // 2 and word[0].strip(string.punctuation + " ").casefold() == wanted
     ]
 
 
