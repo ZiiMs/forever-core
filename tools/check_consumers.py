@@ -27,8 +27,9 @@ drifts the same way:
 - The same `release.yml` must carry core's own "Tag a manual release" step unchanged, the one that peels a signed tag
   and tags a workflow-changing commit with the PAT; `tools/sync_consumers.py` copies it in.
 - A consumer that vendors the client-call lint must run it from its own `tools/typecheck.sh`.
-- Every BigWigs packager step in a consumer's `release.yml` and `ci.yml` must have
+- Every BigWigs packager step in a consumer's `release.yml` and `ci.yml` that builds must have
   `python3 -m tools.forever_tools.toc_version` before it, so `## Version` ships bare, never the tag's `v`.
+  An upload-only step (`args` with `-z`) re-uploads the built ZIP and needs none.
 - A consumer whose root TOC opts in with `## X-Forever-Core-Embed: 1` must run `python3 -m tools.forever_tools.embed`
   before every BigWigs packager step in its `release.yml` and `ci.yml`, so the zip it uploads and the package CI
   checks both carry `Libs/ForeverCore/` (docs/dependency-transition.md).
@@ -520,6 +521,9 @@ def archive_release_problems(jobs):
 EMBED_COMMAND = "tools.forever_tools.embed"
 CI_WORKFLOW = ".github/workflows/ci.yml"
 VERSION_COMMAND = "tools.forever_tools.toc_version"
+PACKAGER = "BigWigsMods/packager@"
+STEP_ITEM = re.compile(r"^(?P<indent>[ \t]*)- ")
+STEP_FIELD = re.compile(r"^(?P<key>[A-Za-z][\w-]*):\s*(?P<value>.*)$")
 
 
 def uncommented(text):
@@ -527,10 +531,50 @@ def uncommented(text):
     return re.sub(r"(?m)^[ \t]*#.*$", lambda line: " " * len(line[0]), text)
 
 
+def packager_steps(text):
+    """Every live BigWigs packager step in `text` as `(start, indent, needs_version)`.
+
+    A step is a YAML sequence item written either as `- uses: BigWigsMods/packager@...` or as a `- name:` item
+    whose `uses:` is on a later line. A comment-only line is blanked first, so a commented-out step is no step.
+    `needs_version` is False only when the step's `args` include `-z`, an upload-only step such as `args: -c -z`;
+    a build step (`args: -d`, or no `args`) needs the bare version step above it.
+    """
+    live = uncommented(text)
+    lines = live.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    found = []
+    for index, line in enumerate(lines):
+        item = STEP_ITEM.match(line)
+        if item is None:
+            continue
+        indent = item["indent"]
+        end = index + 1
+        while end < len(lines):
+            following = lines[end]
+            if following.strip() and len(following) - len(following.lstrip(" \t")) <= len(indent):
+                break
+            end += 1
+        fields = {}
+        for body in lines[index:end]:
+            stripped = body.strip()
+            if stripped.startswith("- "):
+                stripped = stripped[2:].strip()
+            field = STEP_FIELD.fullmatch(stripped)
+            if field is not None:
+                fields.setdefault(field["key"], field["value"].strip())
+        if not fields.get("uses", "").startswith(PACKAGER):
+            continue
+        found.append((offsets[index], indent, "-z" not in fields.get("args", "").split()))
+    return found
+
+
 def check_version_step(repo, branch, local):
-    """Every packager step in a consumer's release and CI workflows has the bare version step before it.
+    """Every packager step in a consumer's release and CI workflows that builds has the bare version step before it.
 
     The packager alone writes the tag, `v1.2.3`, into `## Version`, which no addon's version comparison matches.
+    An upload-only step (`args` with `-z`) re-uploads the ZIP a build step already made, so it needs no version step.
     """
     failures = []
     command = f"python3 -m {VERSION_COMMAND}"
@@ -542,13 +586,13 @@ def check_version_step(repo, branch, local):
             continue
         text = uncommented("" if data is None else data.decode("utf-8", "replace"))
         previous = 0
-        for packager in (match.start() for match in re.finditer(r"BigWigsMods/packager@", text)):
-            if command not in text[previous:packager]:
+        for start, _indent, needs_version in packager_steps(text):
+            if needs_version and command not in text[previous:start]:
                 failures.append(
                     f"{repo}: {path}: a packager step with no `{command}` before it, so the TOC ships the tag's v;"
                     " run tools/sync_consumers.py"
                 )
-            previous = packager
+            previous = start
     return failures
 
 

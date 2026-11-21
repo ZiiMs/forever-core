@@ -16,9 +16,9 @@ The release workflow is not a vendored file: each addon keeps its own. A full sy
 release gate directly above the BigWigs packager step in every consumer that has one, idempotently, so a core release
 that lands between CI and the upload is still caught. A workflow with no packager step (kiln-forever's own tar build)
 is left alone and its exact step is printed for the maintainer. The same full sync puts the bare version step
-(`forever_tools.toc_version`) above every packager step in the release and CI workflows, so the zip's TOC never
-carries the tag's `v`. A full sync also removes the retired Wago store
-metadata, upload credential and store links from consumer-owned publishing files.
+(`forever_tools.toc_version`) above every building packager step in the release and CI workflows, so the zip's TOC
+never carries the tag's `v`; an upload-only step (`args` with `-z`) needs none. A full sync also removes the
+retired Wago store metadata, upload credential and store links from consumer-owned publishing files.
 
 """
 
@@ -30,7 +30,16 @@ import shutil
 import sys
 from pathlib import Path
 
-from check_consumers import CI_WORKFLOW, TAG_STEP, VERSION_COMMAND, pkgmeta_field, tag_step, uncommented, workflow_step
+from check_consumers import (
+    CI_WORKFLOW,
+    TAG_STEP,
+    VERSION_COMMAND,
+    packager_steps,
+    pkgmeta_field,
+    tag_step,
+    uncommented,
+    workflow_step,
+)
 from check_core_shared import CONSUMER_ROOT, VENDORED, source
 
 CORE_ROOT = Path(__file__).resolve().parent.parent
@@ -154,15 +163,19 @@ def version_step(indent="      "):
 
 
 def version_step_edit(text):
-    """`text` with the version step directly above each BigWigs packager step that has none before it, or None."""
+    """`text` with the version step directly above each building packager step that has none before it, or None.
+
+    An upload-only step (`args` with `-z`) re-uploads the ZIP a build step already made, so it gets no version step;
+    `packager_steps` is the same detection the check uses, so the two cannot disagree.
+    """
     live = uncommented(text)  # a commented-out step does not run
-    packagers = list(PACKAGER_STEP.finditer(live))
     command = f"python3 -m {VERSION_COMMAND}"
-    previous, pieces = 0, []
-    for packager in packagers:
-        anchor = packager.start()
-        if command not in live[previous:anchor]:
+    insertions = []
+    previous = 0
+    for start, indent, needs_version in packager_steps(text):
+        if needs_version and command not in live[previous:start]:
             # The pin gate stays the last step before the packager, so the version step goes above it and its comment.
+            anchor = start
             gate = text.rfind(f"- name: {RELEASE_GATE_NAME}\n", previous, anchor)
             if gate >= 0:
                 anchor = text.rfind("\n", previous, gate) + 1
@@ -171,9 +184,16 @@ def version_step_edit(text):
                     if not text[above:anchor].lstrip().startswith("#"):
                         break
                     anchor = above
-            pieces += [text[previous:anchor], version_step(packager["indent"])]
-            previous = anchor
-    updated = "".join(pieces) + text[previous:]
+            insertions.append((anchor, indent))
+        previous = start
+    if not insertions:
+        return None
+    pieces, cursor = [], 0
+    for anchor, indent in insertions:
+        pieces += [text[cursor:anchor], version_step(indent)]
+        cursor = anchor
+    pieces.append(text[cursor:])
+    updated = "".join(pieces)
     return None if updated == text else updated
 
 
