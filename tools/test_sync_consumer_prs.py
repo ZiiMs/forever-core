@@ -1403,9 +1403,7 @@ class BundleTest(unittest.TestCase):
         `check_base` in the shared changelog tool accepts a pull request only when the inserted sections sit above
         text that is otherwise unchanged, so the sync must not reflow the end of the file while adding its entry.
         """
-        self.changelog.write_text(
-            "# Changelog\n\n## [1.2.3] - 2026-11-01\n\n- An older entry.\n\n", encoding="utf-8"
-        )
+        self.changelog.write_text("# Changelog\n\n## [1.2.3] - 2026-11-01\n\n- An older entry.\n\n", encoding="utf-8")
         self.assertTrue(sync.add_changelog_entry(self.root, self.DAY))
         text = self.changelog.read_text(encoding="utf-8")
         self.assertTrue(text.endswith("- An older entry.\n\n"), repr(text[-30:]))
