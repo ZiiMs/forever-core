@@ -617,11 +617,15 @@ SlashCmdList.FOREVERCORE("other", "extra")
 equal(#DevSmokeDB.runs, runsBefore, "another /forever command does not start a run")
 equal(foreverCalls[#foreverCalls].message, "other", "the original handler gets the same words")
 equal(foreverCalls[#foreverCalls].second, "extra", "the original handler gets the same arguments")
+local savesBeforeRun = saves
 SlashCmdList.FOREVERCORE("selftest")
 equal(#DevSmokeDB.runs, runsBefore + 1, "/forever selftest starts a run")
+equal(latest().finished, nil, "a run still stepping is not marked finished")
 drain()
 run = latest()
 equal(#run.results, 6, "/forever selftest runs every surface")
+equal(run.finished, true, "a run that reached its last surface is marked finished")
+equal(saves, savesBeforeRun + 1, "a finished run is saved at once, so the smoke reads it without a reload")
 
 -- In combat nothing is run at all.
 inCombat = true
@@ -630,6 +634,7 @@ SlashCmdList.DEVSMOKE("", nil)
 run = latest()
 equal(#DevSmokeDB.runs, runsBefore + 1, "a combat run is still recorded")
 equal(run.result, "skipped: in combat", "the run is marked skipped")
+equal(run.finished, nil, "a skipped run is not a finished one")
 equal(#run.results, 0, "a skipped run tests nothing")
 equal(#queue, 0, "a skipped run schedules nothing")
 inCombat = false

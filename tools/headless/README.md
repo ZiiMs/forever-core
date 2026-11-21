@@ -137,6 +137,11 @@ or queue position changes. The timeout bounds the wait and does not guarantee ac
 Serve teardown has priority over waiting tickets, but waits for the active job to finish.
 This lets a pending reload finish while ordinary waiters yield to it.
 
+Smoke and proof share one set of in-game checks (`candidate_checks`): a reload, `/forever selftest` read from the
+run `!!DevSmoke` saves when it finishes, then a reload that saves every folder's Lua errors. Proof runs them after its
+last flow and records them in `.visual-proof.json`, which `release_check.py` accepts in place of the
+`headless-smoke` status; smoke posts the same checks as that status for a commit no proof covers.
+
 Proof verifies every borrowed slot before each capture and at teardown. A slot that no
 longer points to the candidate fails the proof before any proof record is written.
 Recovery replays a link record only while holding the job lock. If another job holds it,
