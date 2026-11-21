@@ -141,6 +141,8 @@ Smoke and proof share one set of in-game checks (`candidate_checks`): a reload, 
 run `!!DevSmoke` saves when it finishes, then a reload that saves every folder's Lua errors. Proof runs them after its
 last flow and records them in `.visual-proof.json`, which `release_check.py` accepts in place of the
 `headless-smoke` status; smoke posts the same checks as that status for a commit no proof covers.
+A ForeverCore proof links every consumer's released build beside the candidate, as its smoke does, so
+its flows capture the suite players run and its checks count those folders' errors too.
 
 Proof verifies every borrowed slot before each capture and at teardown. A slot that no
 longer points to the candidate fails the proof before any proof record is written.

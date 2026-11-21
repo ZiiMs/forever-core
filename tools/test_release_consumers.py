@@ -263,11 +263,21 @@ class BuildEvidenceTest(unittest.TestCase):
         read.assert_called_once_with("legacy-forever", ".visual-proof.json", SHA)
         download.assert_not_called()
 
-    def tarball(self, files: dict[str, str]) -> bytes:
-        """The commit's tarball the way GitHub serves it: one top folder named after the repository and commit."""
+    def tarball(self, files: dict[str, str], gate: dict[str, str] | None = None) -> bytes:
+        """The commit's tarball the way GitHub serves it: one top folder named after the repository and commit.
+
+        It vendors core's own proof gate unless `gate` replaces some of its files (None as a value drops one).
+        """
+        vendored = {
+            f"tools/forever_tools/{name}": (release.TOOLING / "forever_tools" / name).read_text()
+            for name in release.PROOF_GATE
+        }
+        vendored.update({f"tools/forever_tools/{name}": text for name, text in (gate or {}).items()})
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w:gz") as bundle:
-            for name, text in files.items():
+            for name, text in {**vendored, **files}.items():
+                if text is None:
+                    continue
                 data = text.encode()
                 info = tarfile.TarInfo(f"cjber-legacy-forever-0123456/{name}")
                 info.size = len(data)
@@ -299,6 +309,18 @@ class BuildEvidenceTest(unittest.TestCase):
             mock.patch.object(release.release_check, "proof_refusal", return_value="visual proof selftest failed"),
         ):
             self.assertFalse(release.proof_covers("legacy-forever", SHA))
+
+    def test_a_consumer_vendoring_another_gate_waits_for_its_smoke(self):
+        for gate in ({"release_check.py": "# predates proofs\n"}, {"visual_proof.py": None}):
+            answer = subprocess.CompletedProcess([], 0, self.tarball({"a.lua": ""}, gate), b"")
+            with (
+                self.subTest(gate),
+                mock.patch.object(release, "read_file", return_value="{}"),
+                mock.patch.object(release.subprocess, "run", return_value=answer),
+                mock.patch.object(release.release_check, "proof_refusal", return_value=None) as refusal,
+            ):
+                self.assertFalse(release.proof_covers("legacy-forever", SHA))
+            refusal.assert_not_called()
 
     def test_a_failed_download_is_an_error(self):
         answer = subprocess.CompletedProcess([], 1, b"", b"HTTP 502")

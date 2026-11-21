@@ -314,11 +314,17 @@ def smoke_status(repo: str, sha: str) -> str:
     return "missing"
 
 
+# The vendored modules `release_check` runs to judge a proof: itself and everything it imports from `forever_tools`.
+PROOF_GATE = ("release_check.py", "visual_proof.py", "pkgmeta.py", "toc.py")
+
+
 def proof_covers(repo: str, sha: str) -> bool:
     """Whether `sha`'s committed `.visual-proof.json` stands in for its headless smoke, as `release_check` decides.
 
     The proof is bound to the commit's file contents, so the check runs over the commit's own tree: its tarball,
-    extracted outside any git work tree, where the packager has no untracked paths to leave out.
+    extracted outside any git work tree, where the packager has no untracked paths to leave out. Core's gate judges
+    the proof, so it covers the commit only when the consumer vendors that same gate: a consumer whose release check
+    still predates proofs, or differs in any other way, would refuse the dispatched release, so it waits for its smoke.
     """
     if read_file(repo, visual_proof.PROOF.as_posix(), sha) is None:
         return False
@@ -332,6 +338,13 @@ def proof_covers(repo: str, sha: str) -> bool:
         with tarfile.open(archive) as bundle:
             bundle.extractall(tree, filter="data")
         (top,) = tree.iterdir()
+        vendored = top / "tools/forever_tools"
+        if any(
+            not (vendored / name).is_file()
+            or (vendored / name).read_bytes() != (TOOLING / "forever_tools" / name).read_bytes()
+            for name in PROOF_GATE
+        ):
+            return False
         return release_check.proof_refusal(top) is None
 
 
