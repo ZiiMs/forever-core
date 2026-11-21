@@ -24,6 +24,7 @@ metadata, upload credential and store links from consumer-owned publishing files
 
 import argparse
 import hashlib
+import json
 import re
 import shutil
 import sys
@@ -34,6 +35,7 @@ from check_core_shared import CONSUMER_ROOT, VENDORED, source
 
 CORE_ROOT = Path(__file__).resolve().parent.parent
 WARNING_MODULE = "Core/ForeverRequire.lua"
+FONT_MANIFEST = "tools/font_bindings.json"
 LOAD_GUARD = "Core/Require.lua"
 VISUAL_WORKFLOW = ".github/workflows/visual-proof.yml"
 VISUAL_PROOF_MODULE = "tools/forever_tools/visual_proof.py"
@@ -76,6 +78,34 @@ def warning_toc_edit(root, repo):
     before = "".join(lines[:guard])
     after = "".join(line for line, entry in zip(lines[guard:], entries[guard:], strict=True) if entry != WARNING_MODULE)
     return toc, before + warning + after
+
+
+def font_digest_edit(root, repo, path, content):
+    """`path`'s pinned font-binding digest refreshed to `content`, or None.
+
+    `path` is core's file, vendored into `repo` by this sync, so the addon cannot review it; a digest the addon
+    pins for it would otherwise fail the addon's typecheck on every core change to the file (#998). Only the
+    digest moves: bindings, notes and every other producer stay exactly as the addon reviewed them.
+    """
+    manifest = root / consumer_path(repo, FONT_MANIFEST)
+    if not manifest.is_file():
+        return None
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    producers = data.get("producers")
+    if not isinstance(producers, list):
+        return None
+    fresh = digest(content)
+    stale = [p for p in producers if isinstance(p, dict) and p.get("source") == path and p.get("sha256") != fresh]
+    if not stale:
+        return None
+    for producer in stale:
+        producer["sha256"] = fresh
+    return manifest, json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
 def release_gate_step(indent="      "):
@@ -236,14 +266,29 @@ def main(argv=None):
     parser.add_argument("checkouts", type=Path, help="the directory holding the consumer checkouts")
     parser.add_argument("--dry-run", action="store_true", help="report what would change and write nothing")
     parser.add_argument("--only", action="append", choices=VENDORED, help="sync only this shared path; may be repeated")
+    parser.add_argument(
+        "--consumer",
+        action="append",
+        metavar="REPO",
+        help="sync only this consumer repository; may be repeated, and one consumer's error then stays its own",
+    )
     arguments = parser.parse_args(argv)
 
+    known_consumers = {repo for consumers in VENDORED.values() for repo in consumers}
+    wanted = set(arguments.consumer or ())
+    unknown = wanted - known_consumers
+    if unknown:
+        parser.error(f"unknown consumer(s): {', '.join(sorted(unknown))}")
+
     changed = 0
+    failures = []
     selected = arguments.only or VENDORED.keys()
     for path in selected:
         consumers = VENDORED[path]
         origin = CORE_ROOT / source(path)
         for repo in consumers:
+            if wanted and repo not in wanted:
+                continue
             root = arguments.checkouts / repo
             target = root / consumer_path(repo, path)
             if not root.is_dir():
@@ -252,25 +297,36 @@ def main(argv=None):
             content = origin.read_bytes()
             try:
                 toc_edit = warning_toc_edit(root, repo) if path == WARNING_MODULE else None
+                if not (target.exists() and digest(target.read_bytes()) == digest(content)):
+                    changed += 1
+                    print(f"{repo}: {path}")
+                    if not arguments.dry_run:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(origin, target)
+                refreshed = font_digest_edit(root, repo, path, content)
+                if refreshed is not None:
+                    font_manifest, font_text = refreshed
+                    changed += 1
+                    print(f"{repo}: {font_manifest.relative_to(root)}: {path} digest")
+                    if not arguments.dry_run:
+                        font_manifest.write_text(font_text, encoding="utf-8")
+                if toc_edit is not None:
+                    toc, text = toc_edit
+                    changed += 1
+                    print(f"{repo}: {toc.relative_to(root)}")
+                    if not arguments.dry_run:
+                        toc.write_bytes(text.encode("utf-8"))
             except (OSError, ValueError) as error:
-                print(f"{repo}: {error}", file=sys.stderr)
-                return 1
-            if not (target.exists() and digest(target.read_bytes()) == digest(content)):
-                changed += 1
-                print(f"{repo}: {path}")
-                if not arguments.dry_run:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(origin, target)
-            if toc_edit is not None:
-                toc, text = toc_edit
-                changed += 1
-                print(f"{repo}: {toc.relative_to(root)}")
-                if not arguments.dry_run:
-                    toc.write_bytes(text.encode("utf-8"))
+                # Reported against this consumer and the run carries on: one addon's missing file once stopped the
+                # sync for every consumer after it (#976).
+                print(f"{repo}: {path}: {error}", file=sys.stderr)
+                failures.append(repo)
     # A full sync also carries the release gate: that workflow is the addon's own, so it is inserted rather than
     # copied, and only when the maintainer asked for everything.
     if arguments.only is None:
-        for repo in sorted({repo for consumers in VENDORED.values() for repo in consumers}):
+        for repo in sorted(known_consumers):
+            if wanted and repo not in wanted:
+                continue
             root = arguments.checkouts / repo
             if not root.is_dir():
                 continue
@@ -279,9 +335,9 @@ def main(argv=None):
                 changed += sync_release_gate(root, repo, arguments.dry_run)
                 changed += sync_tag_step(root, repo, arguments.dry_run)
                 changed += sync_version_step(root, repo, arguments.dry_run)
-            except OSError as error:
+            except (OSError, ValueError) as error:
                 print(f"{repo}: {RELEASE_WORKFLOW}: {error}", file=sys.stderr)
-                return 1
+                failures.append(repo)
     if changed and not arguments.dry_run:
         print("Run each changed consumer's gates and open one PR per consumer for the shared tooling.")
     if changed and VISUAL_WORKFLOW in selected:
@@ -291,6 +347,10 @@ def main(argv=None):
         )
     verb = "would change" if arguments.dry_run else "changed"
     print(f"{changed} file(s) {verb}.")
+    if failures:
+        failed = ", ".join(sorted(set(failures)))
+        print(f"{len(set(failures))} consumer(s) failed and left the rest alone: {failed}", file=sys.stderr)
+        return 1
     return 0
 
 

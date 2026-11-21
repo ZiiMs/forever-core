@@ -1,7 +1,9 @@
 """Tests for tools/sync_consumers.py, run against throwaway core and consumer trees."""
 
 import contextlib
+import hashlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +17,8 @@ ALLOW = b"# allow\n"
 CLIENT_LOAD = b"# client load\n"
 CHECKER = b"# checker\n"
 TOC = "## Interface: 16001\nCore\\Own.lua\n"
+WARNING = b"-- Core/ForeverRequire.lua\n"
+TOC_WITH_GUARD = "## Interface: 16001\nCore\\Require.lua\n"
 LUACHECK = 'read_globals = { "CreateFrame" }\n'
 
 
@@ -149,12 +153,147 @@ class SyncConsumersTest(unittest.TestCase):
         self.assertFalse((root / "addon/KilnForever/.github/workflows/visual-proof.yml").exists())
         self.assertFalse((root / ".github/workflows/visual-proof.yml").exists())
 
+    def test_unreadable_vendored_target_does_not_stop_later_consumer(self):
+        path = "tools/deadcode.py"
+        broken = self.consumer()
+        later = self.consumer("tweaks-forever")
+        (broken / path).mkdir(parents=True)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), mock.patch.object(sync, "VENDORED", {path: (broken.name, later.name)}):
+            code, out = self.run_sync()
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"{broken.name}: {path}:", err.getvalue())
+        self.assertIn(f"1 consumer(s) failed and left the rest alone: {broken.name}", err.getvalue())
+        self.assertEqual((later / path).read_bytes(), DEADCODE)
+
+    def test_invalid_release_workflow_encoding_does_not_stop_later_consumer(self):
+        path = "tools/deadcode.py"
+        broken = self.consumer()
+        later = self.consumer("tweaks-forever")
+        self.write(broken, sync.RELEASE_WORKFLOW, bytes([255]))
+        self.write(later, "README.md", b"CurseForge and Wago")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), mock.patch.object(sync, "VENDORED", {path: (broken.name, later.name)}):
+            code, out = self.run_sync(only=())
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"{broken.name}: {sync.RELEASE_WORKFLOW}:", err.getvalue())
+        self.assertEqual((later / "README.md").read_bytes(), b"CurseForge")
+
+    def test_unknown_consumer_is_rejected(self):
+        self.consumer()
+        self.consumer("legacy-forevr")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
+            self.run_sync("--consumer", "legacy-forever", "--consumer", "legacy-forevr")
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("unknown consumer", err.getvalue())
+        self.assertIn("legacy-forevr", err.getvalue())
+        self.assertFalse((self.checkouts / "legacy-forever/tools/deadcode.py").exists())
+
+    def test_stale_font_digest_is_reported_and_refreshed_for_identical_file(self):
+        root = self.consumer()
+        path = "tools/deadcode.py"
+        self.write(root, path, DEADCODE)
+        manifest = root / "tools/font_bindings.json"
+        original = json.dumps({"producers": [{"source": path, "sha256": "0" * 64}]}).encode()
+        manifest.write_bytes(original)
+
+        with self.subTest("dry run"):
+            code, out = self.run_sync("--dry-run")
+            self.assertEqual(code, 0, out)
+            self.assertIn("tools/font_bindings.json", out)
+            self.assertIn("1 file(s) would change", out)
+            self.assertEqual(manifest.read_bytes(), original)
+            self.assertEqual((root / path).read_bytes(), DEADCODE)
+
+        code, out = self.run_sync()
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 file(s) changed", out)
+        self.assertEqual(
+            json.loads(manifest.read_text())["producers"][0]["sha256"], hashlib.sha256(DEADCODE).hexdigest()
+        )
+        self.assertIn("0 file(s) changed", self.run_sync()[1])
+
+    def test_non_object_font_manifest_is_left_alone(self):
+        root = self.consumer()
+        self.write(root, "tools/font_bindings.json", b"[]")
+        code, out = self.run_sync()
+        self.assertEqual(code, 0, out)
+        self.assertEqual((root / "tools/font_bindings.json").read_bytes(), b"[]")
+        self.assertEqual((root / "tools/deadcode.py").read_bytes(), DEADCODE)
+
+    def test_a_vendored_module_refreshes_its_pinned_font_digest(self):
+        root = self.consumer()
+        self.write(root, ".pkgmeta", b"package-as: LegacyForever\n")
+        self.write(root, "LegacyForever.toc", TOC_WITH_GUARD.encode())
+        self.write(self.core, "tools/consumer/ForeverRequire.lua", WARNING)
+        manifest = {
+            "producers": [
+                {"source": "Core/ForeverRequire.lua", "sha256": "0" * 64, "bindings": []},
+                {"source": "UI/Window.lua", "sha256": "k" * 64, "bindings": [{"phrase": "Label"}]},
+            ]
+        }
+        self.write(root, "tools/font_bindings.json", json.dumps(manifest).encode())
+        code, out = self.run_sync(only=("Core/ForeverRequire.lua",))
+        self.assertEqual(code, 0, out)
+        updated = json.loads((root / "tools/font_bindings.json").read_text())
+        sources = {p["source"]: p["sha256"] for p in updated["producers"]}
+        self.assertEqual(sources["Core/ForeverRequire.lua"], hashlib.sha256(WARNING).hexdigest())
+        # A producer the addon reviews for itself keeps its digest and its bindings.
+        self.assertEqual(sources["UI/Window.lua"], "k" * 64)
+        self.assertEqual(len(updated["producers"][1]["bindings"]), 1)
+
+    def test_a_consumer_without_a_font_manifest_still_syncs(self):
+        root = self.consumer()
+        self.write(root, ".pkgmeta", b"package-as: LegacyForever\n")
+        self.write(root, "LegacyForever.toc", TOC_WITH_GUARD.encode())
+        self.write(self.core, "tools/consumer/ForeverRequire.lua", WARNING)
+        code, out = self.run_sync(only=("Core/ForeverRequire.lua",))
+        self.assertEqual(code, 0, out)
+        self.assertFalse((root / "tools/font_bindings.json").exists())
+
     def test_a_module_the_consumer_already_has_is_overwritten(self):
         root = self.consumer()
         self.write(root, "tools/deadcode.py", b"old\n")
         code, out = self.run_sync()
         self.assertEqual(code, 0, out)
         self.assertEqual((root / "tools/deadcode.py").read_bytes(), DEADCODE)
+
+    def test_one_consumers_error_is_its_own_and_the_rest_still_sync(self):
+        legacy = self.consumer()
+        self.write(legacy, ".pkgmeta", b"package-as: LegacyForever\n")
+        self.write(legacy, "LegacyForever.toc", b"## Interface: 16001\nCore\\Require.lua\n")
+        # A registered consumer whose checkout has no .pkgmeta yet, the way ledger-forever arrived in the suite.
+        (self.checkouts / "ledger-forever").mkdir(parents=True)
+        self.write(self.core, "tools/consumer/ForeverRequire.lua", b"-- shared warning\n")
+        only = ("Core/ForeverRequire.lua",)
+        err = io.StringIO()
+
+        with contextlib.redirect_stderr(err):
+            code, out = self.run_sync(only=only)
+
+        self.assertEqual(code, 1, out)
+        self.assertIn("ledger-forever", err.getvalue())
+        self.assertNotIn("legacy-forever:", err.getvalue())
+        # The consumers after the broken one still got the shared file and its TOC line.
+        self.assertEqual((legacy / only[0]).read_bytes(), b"-- shared warning\n")
+        self.assertIn("Core\\ForeverRequire.lua", (legacy / "LegacyForever.toc").read_text(encoding="utf-8"))
+
+    def test_the_consumer_option_syncs_only_that_repository(self):
+        legacy = self.consumer()
+        self.write(legacy, ".pkgmeta", b"package-as: LegacyForever\n")
+        self.write(legacy, "LegacyForever.toc", b"## Interface: 16001\nCore\\Require.lua\n")
+        ledger = self.checkouts / "ledger-forever"
+        ledger.mkdir(parents=True)
+        self.write(self.core, "tools/consumer/ForeverRequire.lua", b"-- shared warning\n")
+        only = ("Core/ForeverRequire.lua",)
+
+        code, out = self.run_sync("--consumer", "legacy-forever", only=only)
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("legacy-forever: Core/ForeverRequire.lua", out)
+        self.assertNotIn("ledger-forever", out)
+        self.assertFalse((ledger / only[0]).exists())
 
 
 RELEASE_WORKFLOW = """name: Release
