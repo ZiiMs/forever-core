@@ -80,7 +80,6 @@ def warning_toc_edit(root, repo):
     return toc, before + warning + after
 
 
-
 def font_digest_edit(root, repo, path, content):
     """`path`'s pinned font-binding digest refreshed to `content`, or None.
 
@@ -106,6 +105,7 @@ def font_digest_edit(root, repo, path, content):
         producer["sha256"] = fresh
     indent = 2
     return manifest, json.dumps(data, indent=indent, ensure_ascii=False) + "\n"
+
 
 def release_gate_step(indent="      "):
     """The release-workflow step that fails a stale pin immediately before the packager uploads."""
