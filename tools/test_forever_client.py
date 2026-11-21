@@ -2631,6 +2631,18 @@ class StopHandlersTest(unittest.TestCase):
 class SmokeTest(unittest.TestCase):
     """The release smoke: build, selftest, errors per folder, one commit status, links put back."""
 
+    def test_a_dead_character_takes_only_clicks_and_hovers_out_of_combat(self):
+        dead = {"safety": True, "dead": True, "combat": False}
+        with mock.patch.object(fc, "client_ui", return_value=dead), mock.patch.object(fc, "dead_ok", True):
+            REAL_REQUIRE_SAFE({})
+        with mock.patch.object(fc, "client_ui", return_value=dead), mock.patch.object(fc, "dead_ok", False):
+            self.assertRaisesRegex(fc.SafetyRefusal, "dead or a ghost", REAL_REQUIRE_SAFE, {})
+        fighting = dead | {"combat": True}
+        with mock.patch.object(fc, "client_ui", return_value=fighting), mock.patch.object(fc, "dead_ok", True):
+            self.assertRaisesRegex(fc.SafetyRefusal, "dead or a ghost", REAL_REQUIRE_SAFE, {})
+        self.assertNotIn("eval", fc.DEAD_OK_VERBS)
+        self.assertNotIn("slash", fc.DEAD_OK_VERBS)
+
     def test_smoke_refuses_live_unsafe_state_before_build_or_input(self):
         with (
             mock.patch.object(fc, "require_safe", REAL_REQUIRE_SAFE),
@@ -6294,6 +6306,9 @@ class FakeWorld:
             "height": self.size,
             "plate_x": plate_x,
             "bindings": 0,
+            "corpse": False,
+            "corpse_x": 0.0,
+            "corpse_y": 0.0,
         }
 
     @staticmethod
@@ -6502,19 +6517,21 @@ class MovementTest(unittest.TestCase):
         self.assertTrue((self.state / fc.MOVED_MARK).exists(), "the next job end tries again")
 
     def test_the_motion_row_decodes_only_with_its_header_and_checksum(self):
-        fields = [1453, 42730, 46793, 16384, 1000, 600, 16384, 30719]
-        flags = [True, True, False, False]
+        fields = [1453, 42730, 46793, 16384, 1000, 600, 16384, 30719, 32768, 16384]
+        flags = [True, True, False, False, True]
         bits = list(fc.MOTION_HEADER) + flags
         for value in fields:
             bits += [bool(value >> shift & 1) for shift in range(15, -1, -1)]
-        checksum = (1 + 2 + sum(fields)) % 256
+        checksum = (1 + 2 + 5 + sum(fields)) % 256
         bits += [bool(checksum >> shift & 1) for shift in range(7, -1, -1)]
         motion = fc.decode_motion(bits)
         self.assertEqual((motion["map"], motion["width"], motion["height"]), (1453, 1000, 600))
         self.assertAlmostEqual(motion["facing"], math.pi / 2, places=3)
         self.assertTrue(motion["indoors"])
+        self.assertTrue(motion["corpse"])
+        self.assertAlmostEqual(motion["corpse_x"], 0.5, places=3)
         torn = list(bits)
-        torn[20] = not torn[20]
+        torn[22] = not torn[22]
         self.assertIsNone(fc.decode_motion(torn), "a torn frame decodes as nothing")
         self.assertIsNone(fc.decode_motion([False] * len(bits)), "an older addon has no motion row")
 
@@ -6973,6 +6990,8 @@ class LiveSafetyTest(unittest.TestCase):
                 (True, False, "player is dead or a ghost"),
                 (False, True, "player is in combat"),
             ]:
+                if dead and verb in fc.DEAD_OK_VERBS:
+                    continue  # a ghost out of combat may click and press keys to be revived
                 with self.subTest(verb=verb, reason=reason), contextlib.ExitStack() as stack:
                     stack.enter_context(
                         mock.patch.object(
