@@ -218,6 +218,45 @@ dragged.host:MarkDirty()
 dragged.drain()
 dragged.check(dragged.host.point[4] == 300 and dragged.host.point[5] == -300, "a layout mid-drag moves nothing")
 
+-- #1048: Edit Mode moving the tracker fires no layout event per nudge, and the column used to refuse while its drag
+-- flag was set. The host watches that flag from EditMode.Enter and follows the edge each frame of the drag.
+local nudged = harness.new({ hostSettings = { attached = false, placement = "under" } })
+local followedUpdates = nudged.first.updates
+local followedLeft, followedLine = nudged.host.point[4], nudged.host.point[5]
+nudged.setTrackerDragging(true)
+nudged.editMode("EditMode.Enter")
+nudged.advanceUpdates(2)
+nudged.check(#nudged.updateFrames() == 2, "an Edit Mode drag arms the watch and the follower")
+nudged.nativeRect.left, nudged.nativeRect.line = nudged.nativeRect.left - 2, nudged.nativeRect.line - 2
+nudged.advanceUpdates(1)
+nudged.check(
+	nudged.host.point[4] == followedLeft - 2 and nudged.host.point[5] == followedLine - 2,
+	"the column follows a tracker nudged 2 px without a layout event"
+)
+nudged.check(nudged.first.updates == followedUpdates, "following the nudge lays out no section")
+-- A hand-placed column keeps its spot through the same drag.
+local hand = harness.new({ hostSettings = { attached = false, x = 100, y = -200 } })
+hand.setTrackerDragging(true)
+hand.editMode("EditMode.Enter")
+hand.advanceUpdates(2)
+hand.nativeRect.left, hand.nativeRect.line = hand.nativeRect.left - 2, hand.nativeRect.line - 2
+hand.advanceUpdates(1)
+hand.check(
+	hand.host.point[1] == "TOPLEFT" and hand.host.point[4] == 100 and hand.host.point[5] == -200,
+	"a hand-placed column does not move during an Edit Mode drag"
+)
+-- The follower stops with the drag, and no script survives Edit Mode.
+nudged.setTrackerDragging(false)
+nudged.advanceUpdates(1)
+nudged.check(#nudged.updateFrames() == 1, "the follower is disarmed once the drag ends")
+local stoppedLeft = nudged.host.point[4]
+nudged.nativeRect.left = nudged.nativeRect.left + 2
+nudged.advanceUpdates(2)
+nudged.check(nudged.host.point[4] == stoppedLeft, "a finished drag leaves the column where it stopped")
+nudged.editMode("EditMode.Exit")
+nudged.advanceUpdates(20)
+nudged.check(#nudged.updateFrames() == 0, "leaving Edit Mode leaves no OnUpdate running")
+
 -- An explicit free position the player dragged is kept as it is.
 local free = harness.new({ hostSettings = { attached = false, x = 100, y = -200 } })
 free.check(free.host.point[4] == 100 and free.host.point[5] == -200, "a saved free position is kept")
@@ -605,7 +644,22 @@ ContentWheel(-1)
 paging.check(oversized.scrollOffset == heldOffset, "a section without overflow ignores content wheels")
 
 local total = stackedChecks
-local runs = { t, pinned, migrated, unset, beside, dragged, free, userScaled, scroll, floors, cramped, paging }
+local runs = {
+	t,
+	pinned,
+	migrated,
+	unset,
+	beside,
+	dragged,
+	nudged,
+	hand,
+	free,
+	userScaled,
+	scroll,
+	floors,
+	cramped,
+	paging,
+}
 for _, run in ipairs(runs) do
 	total = total + run.checks()
 end

@@ -1257,7 +1257,7 @@ local function CoversList(list)
 end
 ---@param settings ForeverTrackerSettings
 local function FollowTracker(settings)
-	if (settings.x and settings.y) or Drag.Dragging() or ObjectiveTrackerFrame.isDragging or InCombatLockdown() then
+	if (settings.x and settings.y) or Drag.Dragging() or InCombatLockdown() then
 		return
 	end
 	if settings.placement == "left" then
@@ -1317,8 +1317,8 @@ local function Anchor(settings)
 	local screenWidth, screenHeight = UIParent:GetWidth() / scale, UIParent:GetHeight() / scale
 	local width = math.min(WIDTH, screenWidth)
 	host:SetWidth(width)
-	-- Keep the column in place while either tracker is being dragged.
-	if Drag.Dragging() or ObjectiveTrackerFrame.isDragging then
+	-- Keep the column in place while our own header is being dragged. Blizzard's Edit Mode drag is followed above.
+	if Drag.Dragging() then
 		return width, host:GetTop() or screenHeight
 	end
 	if settings.x and settings.y then
@@ -1951,9 +1951,68 @@ local function Listen()
 		end
 	end
 
+	-- A Blizzard Edit Mode drag moves the tracker every frame without a layout event. While Edit Mode is open, one
+	-- frame notices the tracker's own drag flag and a second follows the edge each frame the drag moves it. Both stop
+	-- when Edit Mode exits, and the follower also stops as soon as the drag ends.
+	local watch, follow = CreateFrame("Frame"), CreateFrame("Frame")
+	local dragWatching, dragFollowing = false, false
+	local followShows, followLeft, followLine
+	local function StopFollowing()
+		follow:SetScript("OnUpdate", nil)
+		dragFollowing = false
+	end
+	local function FollowMove()
+		if InCombatLockdown() or not ObjectiveTrackerFrame.isDragging then
+			StopFollowing()
+			return
+		end
+		local shows = TrackerShows()
+		local left, line = TrackerEdge(shows)
+		if shows ~= followShows or left ~= followLeft or line ~= followLine then
+			followShows, followLeft, followLine = shows, left, line
+			if not queued then
+				FollowTracker(Settings())
+			end
+		end
+	end
+	local function StartFollowing()
+		if dragFollowing or not ready or InCombatLockdown() then
+			return
+		end
+		dragFollowing = true
+		followShows, followLeft, followLine = nil, nil, nil
+		follow:SetScript("OnUpdate", FollowMove)
+	end
+	local function WatchMove()
+		if InCombatLockdown() then
+			dragWatching = false
+			watch:SetScript("OnUpdate", nil)
+			StopFollowing()
+			return
+		end
+		if ObjectiveTrackerFrame.isDragging then
+			StartFollowing()
+		end
+	end
+	local function StartWatching()
+		if dragWatching or InCombatLockdown() then
+			return
+		end
+		dragWatching = true
+		watch:SetScript("OnUpdate", WatchMove)
+	end
+	local function StopWatching()
+		dragWatching = false
+		watch:SetScript("OnUpdate", nil)
+		StopFollowing()
+	end
+
 	local function Recheck(layout)
 		if not ready or InCombatLockdown() then
 			return
+		end
+		if ObjectiveTrackerFrame.isDragging then
+			StartWatching()
 		end
 		needsLayout, needsPlacement = needsLayout or layout, true
 		quiet = 0
@@ -1962,7 +2021,9 @@ local function Listen()
 			settle:SetScript("OnUpdate", Sample)
 		end
 	end
+	EventRegistry:RegisterCallback("EditMode.Enter", StartWatching, host)
 	EventRegistry:RegisterCallback("EditMode.Exit", function()
+		StopWatching()
 		Recheck(true)
 	end, host)
 
@@ -2035,6 +2096,7 @@ local function Listen()
 			host:MarkDirty()
 		elseif event == "PLAYER_REGEN_DISABLED" then
 			StopSettling()
+			StopWatching()
 		else
 			Recheck(event ~= "GLOBAL_MOUSE_UP" and not TRACKER_LAYOUT_EVENTS[event])
 		end
