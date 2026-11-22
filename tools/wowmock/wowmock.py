@@ -39,9 +39,12 @@ import math
 import re
 import struct
 import sys
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
@@ -55,6 +58,27 @@ BUILD = "1.60.1.70124"
 USER_AGENT = "wowmock/1.0"
 # WoW: Forever draws its "c60" art (atlas set 1) wherever an atlas element has a member in that set.
 FOREVER_ATLAS_SET = 1
+# wago.tools rate-limits (429) and sheds load (503); wait out the limit instead of failing the scene.
+RETRY_STATUS = (429, 503)
+FETCH_ATTEMPTS = 6
+RETRY_BASE = 2.0
+RETRY_CAP = 60.0
+
+
+def retry_delay(retry_after, attempt):
+    """Seconds to wait: Retry-After as seconds or an HTTP date, else doubling from RETRY_BASE, capped."""
+    wait = RETRY_BASE * 2**attempt
+    if retry_after is not None:
+        try:
+            wait = float(retry_after)
+        except ValueError:
+            try:
+                wait = parsedate_to_datetime(retry_after).timestamp() - time.time()
+            except (TypeError, ValueError):
+                pass
+        if not math.isfinite(wait):
+            wait = RETRY_BASE * 2**attempt
+    return min(max(wait, 0.0), RETRY_CAP)
 
 
 class BannedAsset(ValueError):
@@ -129,8 +153,14 @@ class Wago:
 
     def fetch(self, url, timeout=180):
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
+        for attempt in range(FETCH_ATTEMPTS):
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return response.read()
+            except urllib.error.HTTPError as error:
+                if error.code not in RETRY_STATUS or attempt == FETCH_ATTEMPTS - 1:
+                    raise
+                time.sleep(retry_delay(error.headers.get("Retry-After"), attempt))
 
     def cached(self, path, url):
         if not path.exists():
