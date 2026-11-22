@@ -1934,7 +1934,7 @@ local function Listen()
 			quiet = quiet + 1
 		end
 
-		if needsPlacement and (frames >= 2 or elapsed >= 1) then
+		if needsPlacement and (frames >= 2 or elapsed >= 1) and not ObjectiveTrackerFrame.isDragging then
 			if not queued then
 				if needsLayout then
 					Layout()
@@ -1951,68 +1951,43 @@ local function Listen()
 		end
 	end
 
-	-- A Blizzard Edit Mode drag moves the tracker every frame without a layout event. While Edit Mode is open, one
-	-- frame notices the tracker's own drag flag and a second follows the edge each frame the drag moves it. Both stop
-	-- when Edit Mode exits, and the follower also stops as soon as the drag ends.
-	local watch, follow = CreateFrame("Frame"), CreateFrame("Frame")
-	local dragWatching, dragFollowing = false, false
-	local followShows, followLeft, followLine
-	local function StopFollowing()
-		follow:SetScript("OnUpdate", nil)
-		dragFollowing = false
-	end
-	local function FollowMove()
-		if InCombatLockdown() or not ObjectiveTrackerFrame.isDragging then
-			StopFollowing()
-			return
-		end
-		local shows = TrackerShows()
-		local left, line = TrackerEdge(shows)
-		if shows ~= followShows or left ~= followLeft or line ~= followLine then
-			followShows, followLeft, followLine = shows, left, line
-			if not queued then
-				FollowTracker(Settings())
-			end
-		end
-	end
-	local function StartFollowing()
-		if dragFollowing or not ready or InCombatLockdown() then
-			return
-		end
-		dragFollowing = true
-		followShows, followLeft, followLine = nil, nil, nil
-		follow:SetScript("OnUpdate", FollowMove)
-	end
+	-- A Blizzard Edit Mode nudge moves the tracker without a layout event, so while Edit Mode is open one frame follows
+	-- the edge when it changes. A drag holds the column where it is, and the frame follows once the drag ends. It stops
+	-- when Edit Mode exits and in combat, so no OnUpdate outlives Edit Mode.
+	local watch = CreateFrame("Frame")
+	local dragWatching, dragHeld, watchShows, watchLeft, watchLine
 	local function WatchMove()
 		if InCombatLockdown() then
 			dragWatching = false
 			watch:SetScript("OnUpdate", nil)
-			StopFollowing()
 			return
 		end
-		if ObjectiveTrackerFrame.isDragging then
-			StartFollowing()
+		local dragging = ObjectiveTrackerFrame.isDragging
+		local shows = TrackerShows()
+		local left, line = TrackerEdge(shows)
+		if not dragging and (dragHeld or shows ~= watchShows or left ~= watchLeft or line ~= watchLine) then
+			if not queued then
+				FollowTracker(Settings())
+			end
 		end
+		dragHeld, watchShows, watchLeft, watchLine = dragging, shows, left, line
 	end
 	local function StartWatching()
 		if dragWatching or InCombatLockdown() then
 			return
 		end
 		dragWatching = true
+		dragHeld, watchShows, watchLeft, watchLine = false, nil, nil, nil
 		watch:SetScript("OnUpdate", WatchMove)
 	end
 	local function StopWatching()
 		dragWatching = false
 		watch:SetScript("OnUpdate", nil)
-		StopFollowing()
 	end
 
 	local function Recheck(layout)
 		if not ready or InCombatLockdown() then
 			return
-		end
-		if ObjectiveTrackerFrame.isDragging then
-			StartWatching()
 		end
 		needsLayout, needsPlacement = needsLayout or layout, true
 		quiet = 0
