@@ -112,6 +112,27 @@ unseen.check(
 	"a list never seen placed leaves the native tracker in charge"
 )
 
+-- The sampler runs only while the column follows a list. A column the player dragged holds a free position, so nothing
+-- can move it and six reads four times a second would be pure cost for the rest of the session (#1019).
+local idle = harness.new({ hostSettings = { attached = false, x = 100, y = -200 } })
+local idleList = idle.env.CreateFrame("Frame", "EUI_CustomQuestTracker", idle.parent)
+idleList.left, idleList.top, idleList.height = 900, 860, 200
+idle.env.EUI_CustomQuestTracker = idleList
+idle.tickDelayed()
+-- Let the settle burst that follows an event finish: it stops itself, so anything still armed after it is a sampler.
+local function Settle(ctx)
+	for _ = 1, 120 do
+		ctx.stepUpdates()
+		ctx.drain()
+	end
+	return #ctx.updateFrames()
+end
+idle.check(Settle(idle) == 0, "a dragged column runs no sampler")
+-- Picking a place puts it back under the list, and the sampler starts again from that layout.
+idle.ns.TrackerHost.SetPlacement("under")
+idle.drain()
+idle.check(Settle(idle) == 1, "picking a place starts the sampler again")
+
 -- The left placement pins beside the visible list, not beside the muted native tracker.
 local side = harness.new({ hostSettings = { placement = "left" } })
 local visible = side.env.CreateFrame("Frame", "EUI_CustomQuestTracker", side.parent)

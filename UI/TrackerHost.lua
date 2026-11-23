@@ -1184,6 +1184,20 @@ local function WatchEllesmere()
 		SampleEllesmere()
 	end)
 end
+
+-- Samples run only while the column is actually following a list. A column the player dragged holds a free position
+-- (settings.x and settings.y), and one that fell back to the left pin is not following the list's line either, so
+-- nothing can move it: six geometry reads four times a second for the rest of the session is pure cost, and the column
+-- has a report of stutter in busy windows against it (#1019). FollowTracker restarts the sampler from the layout that
+-- puts the column back under the list.
+local function StopWatchEllesmere()
+	if not ellesmereWatcher then
+		return
+	end
+	ellesmereWatcher:SetScript("OnUpdate", nil)
+	ellesmereWatcher = nil
+	ellesmereSince, ellesmereLast = 0, nil
+end
 -- EllesmereUI's custom list while it is placed. The frame exists only while that option is on (EllesmereUIQuestTracker
 -- builds it from InitCustom), so its presence is the choice, and the choice is latched until a reload; with it off, or
 -- EllesmereUI absent, every caller below falls straight through to the game's tracker as it always did.
@@ -1192,13 +1206,9 @@ local function EllesmereList()
 	local list = EllesmereFrame()
 	if not list then
 		ellesmereRect, ellesmereRectScale, ellesmereLast = nil, nil, nil
-		if ellesmereWatcher then
-			ellesmereWatcher:SetScript("OnUpdate", nil)
-			ellesmereWatcher = nil
-		end
+		StopWatchEllesmere()
 		return nil
 	end
-	WatchEllesmere()
 	local left, top, right, bottom = EllesmereRect(list)
 	if not left then
 		return nil
@@ -1559,9 +1569,17 @@ end
 ---@param settings ForeverTrackerSettings
 ---@param allowLayout? boolean
 local function FollowTracker(settings, allowLayout)
-	if (settings.x and settings.y) or Drag.Dragging() or InCombatLockdown() then
+	-- A column the player dragged holds a free position and follows nothing, so the sampler stops until a layout puts
+	-- it back under or beside a list. This is the only place it starts: every pass that follows a list comes through
+	-- here, including the one PLAYER_REGEN_ENABLED and the settle burst run.
+	if settings.x and settings.y then
+		StopWatchEllesmere()
 		return
 	end
+	if Drag.Dragging() or InCombatLockdown() then
+		return
+	end
+	WatchEllesmere()
 	if settings.placement == "left" then
 		PinLeft()
 		return
