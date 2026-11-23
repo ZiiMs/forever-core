@@ -41,8 +41,8 @@ required store dependency, retaining its pinned external and move rule. A consum
 `## X-Forever-Core-Embed: 1` carries core under `Libs/ForeverCore/` and lists it under `embedded-libraries:`, so it
 never gets the required relation (docs/dependency-transition.md).
 
-The pin is the whole bundle, because every consumer's release zip carries its own ForeverCore copy from that pin: every
-run points a bridge consumer's `.pkgmeta` ForeverCore external at the pin and sets the root TOC's `## X-Forever-Core:`
+For consumers that ship a ForeverCore copy, the pin also selects the bundle: every run
+points a bridge consumer's `.pkgmeta` ForeverCore external at the pin and sets the root TOC's `## X-Forever-Core:`
 line (adding it after `## OptionalDeps:` when absent), so a consumer that pins v1.5.0 while its zip still downloads
 v1.4.1 is repaired even when the pin does not move. Every run also moves a TOC that still names ForeverCore in
 `## Dependencies` to `## OptionalDeps`, keeping every other name on the line, so the addon loads when core is missing
@@ -50,8 +50,8 @@ and can say what is. The changelog decision is that same fact rather than whethe
 the consumer's newest released tag on `origin` and the core that release bundles (its `.pkgmeta` ForeverCore external,
 or its root TOC's `## X-Forever-Core:` field) and adds a release entry when that core differs from the pin, so a re-run
 repairs a consumer whose `main` already pins the new core while its last release still ships an older one. A consumer
-that neither ships the external nor embeds core (kiln-forever) bundles no core, so its pin and TOC field move with no
-changelog change; an embedded consumer bundles the pin's core and gets the entry. A consumer whose `## [Unreleased]`
+that neither ships the external nor embeds core (kiln-forever) gets only the CI pin update.
+A consumer whose `## [Unreleased]`
 section holds notes gets no release entry: the plain shared-code bullet joins those notes, so the core ships in that
 addon's own next release. Pending `changes/*.md` fragments instead get a `changes/forever-core-sync.md` fragment. With
 no pending fragments or Unreleased notes, the consumer gets a marked release entry above the newest release, that patch
@@ -367,7 +367,8 @@ def bump_pin(root: Path, latest: str | None, today: date | None = None) -> str |
     `root` is the consumer repository clone. The CI pin lives at its root even when the addon lives in a
     subdirectory. Only comparable `vX.Y.Z` tags move forward.
 
-    Every run also points the bundle at the pin, moved or not: the `.pkgmeta` external and the root TOC's
+    For consumers that ship Core, every run points the bundle at the pin, moved or not. The `.pkgmeta` external and
+    the root TOC's
     `## X-Forever-Core:` field name the release the pin ships, so a consumer that pins v1.5.0 while its zip still
     downloads v1.4.1 is repaired. `CHANGELOG.md` is touched when the consumer's latest released tag bundles a core
     other than `pinned`, whether this run moved the pin or a re-run found it already moved. Pending fragments get
@@ -706,8 +707,7 @@ def embeds_core(root: Path) -> bool:
 def update_bundle(root: Path, pin: str, today: date | None = None, previous_pin: str | None = None) -> None:
     """Point the bundle at `pin`, touching the changelog when the consumer's latest release ships another core.
 
-    A consumer whose `.pkgmeta` has no ForeverCore external (kiln-forever has no `.pkgmeta` at all) bundles no core, so
-    a pin that moves gives its own release nothing to carry: it still gets the pin and the TOC field, and no entry.
+    A consumer that ships no Core copy only needs its CI pin, which bump_pin handles before this call.
 
     The decision is the released tag's bundled core, not whether this run moved the pin: `main` can already pin the new
     core while the latest release still ships the old one, and a re-run has to repair that. A consumer that has never
@@ -715,14 +715,13 @@ def update_bundle(root: Path, pin: str, today: date | None = None, previous_pin:
     """
     # Either way the release zip carries core: as the bridge external or as the embedded copy the embed step makes from
     # the pin. Only the bridge external gets the required relation; an embedded consumer lists it as embedded.
-    bundles = ships_core(root) or embeds_core(root)
+    if not (ships_core(root) or embeds_core(root)):
+        return
     dependency_changed = ensure_core_dependency(root)
     rewrite_toc_dependencies(root)
     before = bundle_tag(root) or previous_pin
     rewrite_core_external(root, pin)
     rewrite_toc_core_field(root, pin)
-    if not bundles:
-        return
     released = latest_release_tag(root)
     if released is None:
         if dependency_changed or (bundle_tag(root) or pin) != before:
@@ -976,21 +975,12 @@ def proof_hint(repo: str, ref: str) -> str:
     )
 
 
-def pr_body(sha: str, files: tuple[str, ...], pin_bump: tuple[str, str] | None = None, embedded: bool = False) -> str:
+def pr_body(sha: str, files: tuple[str, ...], pin_bump: tuple[str, str] | None = None) -> str:
     lines = ["Syncs this addon's copy of ForeverCore's development tooling.", ""]
     if pin_bump:
         lines += [
             f"Moves the ForeverCore pin from {pin_bump[0]} to {pin_bump[1]}, so this addon's CI runs against the"
             " latest release.",
-            "",
-            (
-                "This PR points `## X-Forever-Core:` at that tag, which the embed step copies into"
-                " `Libs/ForeverCore/`, and adds a marked CHANGELOG.md release entry for the release-consumers workflow"
-                " to publish."
-                if embedded
-                else "This PR points the bundled ForeverCore external and `## X-Forever-Core:` at that tag, and"
-                " adds a marked CHANGELOG.md release entry for the release-consumers workflow to publish."
-            ),
             "",
         ]
     if RELEASE_WORKFLOW in files:
@@ -1193,7 +1183,7 @@ def sync_consumer(
                 new_pin = (root / pin_path).read_text(encoding="utf-8").strip()
                 if old_pin.returncode == 0 and release_version(old_pin.stdout.strip()) and release_version(new_pin):
                     pin_bump = (old_pin.stdout.strip(), new_pin)
-        body = pr_body(sha, pr_files, pin_bump, embeds_core(root))
+        body = pr_body(sha, pr_files, pin_bump)
         if in_place:
             try:
                 oid = create_commit(repo, BRANCH, base, sha, additions, deletions, workspace)
