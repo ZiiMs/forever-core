@@ -364,9 +364,8 @@ def released_core_tag(root: Path, tag: str) -> str | None:
 def bump_pin(root: Path, latest: str | None, today: date | None = None) -> str | None:
     """Move the consumer's ForeverCore pin up to `latest`, returning the tag it moved from.
 
-    `root` is a clone named after the consumer's repository, so a consumer whose addon lives below its root
-    (kiln-forever) gets the pin at the path CONSUMER_ROOT names. A pin that is equal, newer, or not a `vX.Y.Z` tag is
-    left exactly as it is: the pin never moves backwards, and a tag this cannot compare is a maintainer's call.
+    `root` is the consumer repository clone. The CI pin lives at its root even when the addon lives in a
+    subdirectory. Only comparable `vX.Y.Z` tags move forward.
 
     Every run also points the bundle at the pin, moved or not: the `.pkgmeta` external and the root TOC's
     `## X-Forever-Core:` field name the release the pin ships, so a consumer that pins v1.5.0 while its zip still
@@ -376,13 +375,13 @@ def bump_pin(root: Path, latest: str | None, today: date | None = None) -> str |
     `## [Unreleased]` get the shared bullet and no entry. A consumer that has never released falls back to whether
     this run changed its local bundle.
     """
-    path = root / consumer_path(root.name, PIN_PATH)
+    path = root / PIN_PATH
     if not path.is_file():
         return None
     current = path.read_text(encoding="utf-8").strip()
     current_version = release_version(current)
     if current_version is None:
-        print(f"{root.name}: {consumer_path(root.name, PIN_PATH)} is not a vX.Y.Z tag ({current!r}); leaving it alone.")
+        print(f"{root.name}: {PIN_PATH} is not a vX.Y.Z tag ({current!r}); leaving it alone.")
         return None
     pinned = current
     bumped = None
@@ -1188,7 +1187,7 @@ def sync_consumer(
         if in_place:
             diff = git(root, "diff", "--cached", "--name-only", "--no-renames", "-z", main).stdout
             pr_files = tuple(sorted(path for path in diff.split("\0") if path))
-            pin_path = consumer_path(root.name, PIN_PATH)
+            pin_path = PIN_PATH
             if pin_path in pr_files and (root / pin_path).is_file():
                 old_pin = git(root, "show", f"{main}:{pin_path}", check=False)
                 new_pin = (root / pin_path).read_text(encoding="utf-8").strip()
