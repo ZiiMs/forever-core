@@ -1084,10 +1084,138 @@ local function QuestieList()
 	end
 	return nil
 end
--- What the quest tracker on screen shows, which decides its last visible line: "questie" for Questie's list, or for
--- the game's tracker "hidden" with nothing to list, "collapsed" to its header, or "list". Reads only.
----@return "questie"|"hidden"|"collapsed"|"list"
+-- EllesmereUI's Custom Quest Tracker, when that is the slot the player chose. With it on, EllesmereUI keeps the game's
+-- tracker shown at alpha 0 and click-through, holding every watched quest, and draws the filtered list the player reads
+-- in EUI_CustomQuestTracker (#332). No client API names a replacement tracker, so the column knows this one by its
+-- frame's name, as it does Questie's. The frame exists only while that option is on (EllesmereUIQuestTracker builds it
+-- from InitCustom), so its presence is the choice, and the choice is latched until a reload. Reads only.
+--
+-- Where that list is, in the host's units, remembered while EllesmereUI's own rules hide it: arenas, raids, an empty
+-- log and mouseover mode all take the frame off screen. The muted native tracker behind it is still shown and still
+-- holds the game's raw quests, so following that would put the column under quests the player cannot see. A frame that
+-- is gone is not hiding but turned off, and the column reads the game's tracker as it always did. Reads only.
+--
+-- EllesmereUI renders its list on its own zero-delay timer, so a quest arriving, a filter changing and the list folding
+-- all resize or hide the frame after QUEST_LOG_UPDATE has already returned: there is no client event for any of it.
+-- This column never listens to another addon's frame, so it samples the rect itself, from a frame of its own, and lays
+-- out only when the sample differs -- the same shape as reading a tracker nobody hands events for.
+local SAMPLE_INTERVAL = 0.25
+---@type number?, number?, number[]?
+local ellesmereSince, ellesmereRectScale, ellesmereLast
+---@type table?
+local ellesmereRect
+---@type Frame?
+local ellesmereWatcher
+-- What that list is, when it exists at all: another addon's frame, read by name.
+---@return Frame?
+local function EllesmereFrame()
+	local list = rawget(_G, "EUI_CustomQuestTracker")
+	if type(list) == "table" and type(list.GetLeft) == "function" then
+		return list
+	end
+end
+-- Its rect in the host's units, and the scale it was taken at. A scale change makes the cached rect wrong, so it is
+-- dropped rather than converted: a list hidden before then says nothing about the room, and the game's tracker is read
+-- again, which is what the column did before EllesmereUI was a list source.
+---@param list Frame
+---@return number? left, number? top, number? right, number? bottom
+local function EllesmereRect(list)
+	local scale = list:GetEffectiveScale()
+	if not list:IsShown() then
+		if not ellesmereRect or scale ~= ellesmereRectScale then
+			ellesmereRect, ellesmereRectScale = nil, nil
+			return nil
+		end
+		return ellesmereRect[1], ellesmereRect[2], ellesmereRect[3], ellesmereRect[4]
+	end
+	local left, top = Coordinate(list:GetLeft()), Coordinate(list:GetTop())
+	local right, bottom = Coordinate(list:GetRight()), Coordinate(list:GetBottom())
+	if not (left and top and bottom) then
+		return nil
+	end
+	local toHost = scale / host:GetEffectiveScale()
+	ellesmereRect = { left * toHost, top * toHost, right and right * toHost, bottom * toHost }
+	ellesmereRectScale = scale
+	return ellesmereRect[1], ellesmereRect[2], ellesmereRect[3], ellesmereRect[4]
+end
+-- One sample: the six reads the placement itself uses, compared with the last one, so a layout runs only when the list
+-- the column follows has actually moved, resized, shown, hidden or been rescaled.
+local function SampleEllesmere()
+	local list = EllesmereFrame()
+	if not list then
+		if ellesmereWatcher then
+			ellesmereWatcher:SetScript("OnUpdate", nil)
+			ellesmereWatcher = nil
+		end
+		ellesmereLast = nil
+		return
+	end
+	local left, top = list:GetLeft(), list:GetTop()
+	local right, bottom = list:GetRight(), list:GetBottom()
+	local scale, shown = list:GetEffectiveScale(), list:IsShown()
+	local last = ellesmereLast
+	if
+		last
+		and last[1] == left
+		and last[2] == top
+		and last[3] == right
+		and last[4] == bottom
+		and last[5] == scale
+		and last[6] == shown
+	then
+		return
+	end
+	ellesmereLast = { left, top, right, bottom, scale, shown }
+	host:MarkDirty()
+end
+
+local function WatchEllesmere()
+	if ellesmereWatcher then
+		return
+	end
+	ellesmereSince = 0
+	ellesmereWatcher = CreateFrame("Frame")
+	ellesmereWatcher:SetScript("OnUpdate", function(_, elapsed)
+		ellesmereSince = ellesmereSince + (elapsed or 0)
+		if ellesmereSince < SAMPLE_INTERVAL then
+			return
+		end
+		ellesmereSince = 0
+		SampleEllesmere()
+	end)
+end
+-- EllesmereUI's custom list while it is placed. The frame exists only while that option is on (EllesmereUIQuestTracker
+-- builds it from InitCustom), so its presence is the choice, and the choice is latched until a reload; with it off, or
+-- EllesmereUI absent, every caller below falls straight through to the game's tracker as it always did.
+---@return Frame? list, number? left, number? top, number? right, number? bottom
+local function EllesmereList()
+	local list = EllesmereFrame()
+	if not list then
+		ellesmereRect, ellesmereRectScale, ellesmereLast = nil, nil, nil
+		if ellesmereWatcher then
+			ellesmereWatcher:SetScript("OnUpdate", nil)
+			ellesmereWatcher = nil
+		end
+		return nil
+	end
+	WatchEllesmere()
+	local left, top, right, bottom = EllesmereRect(list)
+	if not left then
+		return nil
+	end
+	return list, left, top, right, bottom
+end
+-- What the quest tracker on screen shows, which decides its last visible line: "ellesmere" or "questie" for a list
+-- another addon draws in the game tracker's place, or for the game's tracker "hidden" with nothing to list,
+-- "collapsed" to its header, or "list". EllesmereUI is read before Questie, as it was when the column followed it
+-- (#332). Reads only.
+---@return "ellesmere"|"questie"|"hidden"|"collapsed"|"list"
 local function TrackerShows()
+	-- The list itself, not just its frame: a custom tracker this session never saw placed cannot say where its last
+	-- line is, so the game's tracker is still the one the column goes by.
+	if EllesmereList() then
+		return "ellesmere"
+	end
 	if QuestieList() then
 		return "questie"
 	end
@@ -1124,9 +1252,18 @@ end
 -- while the player has it collapsed, since its sections hide then but the NineSlice keeps their old anchor; or the
 -- tracker's top while it is hidden with nothing to show. Returns that x and y in the host's own units, nil before the
 -- client has placed the tracker. These are reads only; nothing here writes to the tracker or hooks it.
----@param shows "questie"|"hidden"|"collapsed"|"list"
+---@param shows "ellesmere"|"questie"|"hidden"|"collapsed"|"list"
 ---@return number? x, number? top, number? right
 local function TrackerEdge(shows)
+	if shows == "ellesmere" then
+		-- The custom frame's height is the filtered content's height, capped and then scrolled, so its bottom edge is
+		-- where the list the player reads ends in either Grow Direction: a frame growing up keeps that edge still.
+		local _, left, _, right, bottom = EllesmereList()
+		if not (left and bottom) then
+			return nil
+		end
+		return left, bottom, right
+	end
 	local hostScale = host:GetEffectiveScale()
 	local list = shows == "questie" and QuestieList()
 	if list then
@@ -1282,8 +1419,19 @@ local function TrackerCorner(tracker)
 	return left and left * scale, top and top * scale, right and right * scale
 end
 
+-- The corner the column pins itself by when it sits beside the list: the visible list when another addon draws one,
+-- otherwise the game's tracker.
+---@return number? left, number? top, number? right
+local function ForeignCorner()
+	local _, left, top, right = EllesmereList()
+	if left then
+		return left, top, right
+	end
+	return TrackerCorner(QuestieList() or ObjectiveTrackerFrame)
+end
+
 local function PinLeft()
-	local left, top = TrackerCorner(QuestieList() or ObjectiveTrackerFrame)
+	local left, top = ForeignCorner()
 	if left and top then
 		local width = host:GetWidth() or 0
 		SetColumnPoint("TOPRIGHT", "BOTTOMLEFT", left, MinimapTop(left - width, width, top))
@@ -1348,17 +1496,24 @@ local function CoversList(list)
 	return left < listRight and listLeft < right and bottom < listTop and listBottom < top
 end
 -- A locked column keeps its position until a growing list or the minimap takes that space.
+--
+-- One exception, and only for EllesmereUI's list: its custom tracker resizes in place on its own timer, so folding a
+-- quest or a zone moves the last line the column is under with nothing else on screen changing. A locked column that
+-- refused to move would then hang below where the list ends, and the player would have to unlock and re-place it. The
+-- game's tracker and Questie keep the one-way rule below -- never up -- so a list that shrinks under them cannot drag
+-- the column around; only a line that drops takes a locked column with it.
 local function LockedUnderPosition(shows, width, height)
 	local x = host:GetLeft() or 0
 	local heldTop = host:GetTop() or 0
-	if CoversList(QuestieList()) then
+	if CoversList(EllesmereList() or QuestieList()) then
 		local underX, underTop, underFloor = UnderPosition(shows, width, height)
 		if underX and underTop and underFloor then
 			return underX, underTop, underFloor
 		end
 	end
 	local _, line = TrackerEdge(shows)
-	local top = MinimapTop(x, width, line and math.min(heldTop, line) or heldTop)
+	local following = shows == "ellesmere" and line
+	local top = MinimapTop(x, width, following or (line and math.min(heldTop, line)) or heldTop)
 	local floor = BarRoom(x, width, top, height)
 	return x, top, floor
 end
@@ -1375,7 +1530,7 @@ local function FitSections(width, available)
 end
 
 local function PinSide(width, height)
-	local left, top, right = TrackerCorner(QuestieList() or ObjectiveTrackerFrame)
+	local left, top, right = ForeignCorner()
 	local anchor, x, sideTop, floor = SidePosition(width, height, left, top, right)
 	if not (anchor and x and sideTop and floor) then
 		return false
@@ -1434,14 +1589,22 @@ local function FollowTracker(settings, allowLayout)
 			local _, line = TrackerEdge(shows)
 			local x = host:GetLeft() or 0
 			local heldTop = host:GetTop() or 0
-			local top = MinimapTop(x, width, heldTop)
+			-- EllesmereUI resizes its list in place on its own timer, so a fold and an unfold both move the last line
+			-- the column is under. A locked column that only ever moved down would hang below a folded list until the
+			-- player unlocked and re-placed it, so here it follows the line both ways. The game's tracker and
+			-- Questie keep the one-way rule: a list shrinking under them never drags the column up.
+			local top = MinimapTop(x, width, (shows == "ellesmere" and line) or heldTop)
 			local floor = BarRoom(x, width, top, height)
-			if height > (line or math.huge) - floor or height > top - floor or CoversList(QuestieList()) then
+			if
+				height > (line or math.huge) - floor
+				or height > top - floor
+				or CoversList(EllesmereList() or QuestieList())
+			then
 				if PinSide(width, height) then
 					return
 				end
 			else
-				if top < heldTop then
+				if top ~= heldTop then
 					SetColumnPoint("TOPLEFT", "BOTTOMLEFT", x, top)
 				end
 				return
@@ -1494,7 +1657,7 @@ local function Anchor(settings)
 	if settings.placement == "under" then
 		local height = host:GetHeight() or screenHeight
 		local shows = TrackerShows()
-		local left, top, right = TrackerCorner(QuestieList() or ObjectiveTrackerFrame)
+		local left, top, right = ForeignCorner()
 		local x, underTop, underFloor = UnderPosition(shows, width, height)
 		local holding = settings.locked and followed and under and not placeAgain
 		if underTop and (settings.stayUnder or not SidePosition(width, height, left, top, right)) then
@@ -2185,8 +2348,9 @@ local function Listen()
 		Recheck(true)
 	end, host)
 
-	-- Questie can build its list asynchronously after login. Stop sampling once it has geometry or the
-	-- discovery window ends. Subsequent movement and visibility changes are handled by events.
+	-- Questie and EllesmereUI can build their lists asynchronously after login: Questie a few seconds in, EllesmereUI
+	-- on PLAYER_LOGIN through a zero-delay timer. Stop sampling once the list has geometry or the discovery window
+	-- ends. Subsequent movement and visibility changes are handled by events.
 	local discovering, remaining = false, 0
 	local function DiscoverQuestie()
 		remaining = 8
@@ -2195,7 +2359,7 @@ local function Listen()
 		end
 		discovering = true
 		local function Discover()
-			local list = QuestieList()
+			local list = EllesmereList() or QuestieList()
 			if list and list:GetLeft() and list:GetTop() and list:GetBottom() then
 				discovering = false
 				if not queued then
@@ -2228,7 +2392,7 @@ local function Listen()
 	host:RegisterEvent("ADDON_LOADED")
 	host:SetScript("OnEvent", function(_, event, addon)
 		if event == "ADDON_LOADED" then
-			if addon == "Questie" and ready then
+			if (addon == "Questie" or addon == "EllesmereUIQuestTracker") and ready then
 				DiscoverQuestie()
 			end
 			return
@@ -2287,7 +2451,8 @@ function api.Debug()
 			frame:GetEffectiveScale()
 		)
 	end
-	return ("combat=%s shown=%s under=%s hostH=%.1f host[%s] g[%s] uiS%.2f"):format(
+	return ("list=%s combat=%s shown=%s under=%s hostH=%.1f host[%s] g[%s] uiS%.2f"):format(
+		tostring(TrackerShows()),
 		tostring(InCombatLockdown()),
 		tostring(host:IsShown()),
 		tostring(under),
