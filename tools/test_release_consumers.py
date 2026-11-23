@@ -28,12 +28,17 @@ def runs(*items):
 
 def ci_run(status, conclusion, sha=SHA, branch="main", started="2026-11-11T10:00:00Z"):
     return {
+        "id": 1,
         "head_sha": sha,
         "head_branch": branch,
         "status": status,
         "conclusion": conclusion,
         "run_started_at": started,
     }
+
+
+def ci_job(name, conclusion="success", status="completed"):
+    return {"name": name, "status": status, "conclusion": conclusion}
 
 
 def release_run(status, conclusion, sha=SHA):
@@ -353,6 +358,70 @@ class PlanTest(unittest.TestCase):
         self.fragments = fragments.start()
         self.addCleanup(fragments.stop)
 
+    def plan_with_ci_jobs(self, jobs, run=None):
+        run = run or ci_run("completed", "failure")
+        with (
+            mock.patch.object(release, "main_head", return_value=SHA),
+            mock.patch.object(release, "read_changelog", return_value=SYNC_ENTRY),
+            mock.patch.object(release, "tag_exists", return_value=False),
+            mock.patch.object(release, "release_runs", return_value=runs({"status": "completed"})),
+            mock.patch.object(release, "ci_runs", return_value=runs(run)),
+            mock.patch.object(release, "ci_jobs", return_value={"jobs": jobs}) as jobs_read,
+            mock.patch.object(release, "build_evidence", return_value="success"),
+        ):
+            decision = release.plan("legacy-forever")
+        return decision, jobs_read
+
+    def test_a_failed_run_whose_only_failed_job_is_visual_proof_releases(self):
+        jobs = [ci_job("test"), ci_job("visual-proof", "failure")]
+        decision, jobs_read = self.plan_with_ci_jobs(jobs)
+        self.assertTrue(decision.release)
+        self.assertEqual(decision.commit, SHA)
+        self.assertTrue(decision.skip_visual_proof)
+        jobs_read.assert_called_once_with("legacy-forever", 1)
+
+    def test_visual_proof_beside_another_failed_job_holds_the_release(self):
+        jobs = [ci_job("visual-proof", "failure"), ci_job("test", "failure")]
+        decision, _ = self.plan_with_ci_jobs(jobs)
+        self.assertFalse(decision.release)
+        self.assertFalse(decision.failed)
+        self.assertIn("ci.yml on main's head 0123456 is completed/failure", decision.reason)
+
+    def test_visual_proof_with_a_cancelled_job_holds_the_release(self):
+        jobs = [ci_job("visual-proof", "failure"), ci_job("test", "cancelled")]
+        decision, _ = self.plan_with_ci_jobs(jobs)
+        self.assertFalse(decision.release)
+
+    def test_a_run_whose_only_failing_job_is_another_job_holds_the_release(self):
+        jobs = [ci_job("test", "failure"), ci_job("visual-proof")]
+        decision, _ = self.plan_with_ci_jobs(jobs)
+        self.assertFalse(decision.release)
+        self.assertIn("ci.yml on main's head 0123456 is completed/failure", decision.reason)
+
+    def test_a_failed_run_with_a_job_still_going_waits(self):
+        for status in ("in_progress", "queued"):
+            with self.subTest(status=status):
+                jobs = [ci_job("visual-proof", "failure"), ci_job("test", None, status)]
+                decision, _ = self.plan_with_ci_jobs(jobs)
+                self.assertFalse(decision.release)
+                self.assertIn("ci.yml on main's head 0123456 is completed/failure", decision.reason)
+
+    def test_a_successful_run_is_unaffected_and_reads_no_jobs(self):
+        decision, jobs_read = self.plan_with_ci_jobs([], run=ci_run("completed", "success"))
+        self.assertTrue(decision.release)
+        self.assertFalse(decision.skip_visual_proof)
+        jobs_read.assert_not_called()
+
+    def test_an_odd_jobs_payload_never_releases(self):
+        for payload in (None, [], {}, {"jobs": "nope"}, {"jobs": [{"name": "visual-proof", "conclusion": "failure"}]}):
+            with (
+                self.subTest(payload=payload),
+                mock.patch.object(release, "ci_jobs", return_value=payload),
+            ):
+                self.assertFalse(
+                    release.only_visual_proof_failed("legacy-forever", runs(ci_run("completed", "failure")), SHA)
+                )
+
     def test_pending_fragments_skip_a_marked_entry_before_any_workflow_read(self):
         self.fragments.return_value = True
         with (
@@ -501,7 +570,7 @@ class MainTest(unittest.TestCase):
         ):
             self.assertEqual(release.main(), 0)
 
-        dispatched.assert_called_once_with("skillup-forever", "1.4.3", SHA)
+        dispatched.assert_called_once_with("skillup-forever", "1.4.3", SHA, skip_visual_proof=False)
         self.assertIn("legacy-forever: waiting: v1.4.3 is already released", out.getvalue())
         self.assertIn(f"skillup-forever: dispatched release.yml for v1.4.3 at {SHA}", out.getvalue())
 
@@ -624,12 +693,12 @@ class EmbedFleetTest(unittest.TestCase):
     def test_an_opted_in_release_goes_once_every_addon_has_opted_in(self):
         code, out, dispatched = self.run_main(dict.fromkeys(release.EMBED_FLEET, True))
         self.assertEqual(code, 0, out)
-        dispatched.assert_called_once_with("macro-assist-forever", "1.4.3", SHA)
+        dispatched.assert_called_once_with("macro-assist-forever", "1.4.3", SHA, skip_visual_proof=False)
 
     def test_a_consumer_not_opted_in_releases_without_reading_the_fleet(self):
         code, out, dispatched = self.run_main(dict.fromkeys(release.EMBED_FLEET, False))
         self.assertEqual(code, 0, out)
-        dispatched.assert_called_once_with("macro-assist-forever", "1.4.3", SHA)
+        dispatched.assert_called_once_with("macro-assist-forever", "1.4.3", SHA, skip_visual_proof=False)
 
     def run_batch(self, ready, released):
         """Every addon opted in; `ready` names those whose own plan releases now, `released` those already embedded."""
@@ -773,6 +842,11 @@ class ApiTest(unittest.TestCase):
             ),
         )
 
+    def test_the_dispatch_passes_the_visual_proof_waiver(self):
+        with mock.patch.object(release, "gh") as gh:
+            release.dispatch("legacy-forever", "1.4.3", SHA, skip_visual_proof=True)
+        self.assertEqual(gh.call_args.args[-2:], ("-f", "skip_visual_proof=true"))
+
     def test_workflow_runs_are_read_as_json(self):
         requests = []
 
@@ -783,11 +857,13 @@ class ApiTest(unittest.TestCase):
         with mock.patch.object(release, "api_json", side_effect=fake_api_json):
             self.assertEqual(release.release_runs("legacy-forever"), {"workflow_runs": []})
             self.assertEqual(release.ci_runs("legacy-forever", SHA), {"workflow_runs": []})
+            self.assertEqual(release.ci_jobs("legacy-forever", 42), {"workflow_runs": []})
         self.assertEqual(
             requests,
             [
                 "repos/cjber/legacy-forever/actions/workflows/release.yml/runs?per_page=20",
                 f"repos/cjber/legacy-forever/actions/workflows/ci.yml/runs?head_sha={SHA}&event=push&per_page=100",
+                "repos/cjber/legacy-forever/actions/runs/42/jobs?per_page=100",
             ],
         )
 

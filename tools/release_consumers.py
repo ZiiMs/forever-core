@@ -52,7 +52,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 # Run as a script, nothing has put the addon skill pack's tooling on the path yet.
@@ -74,6 +74,8 @@ MARKER = "<!-- forever-core-sync -->"
 CHANGELOG = "CHANGELOG.md"
 RELEASE_WORKFLOW = "release.yml"
 CI_WORKFLOW = "ci.yml"
+# The one CI job `release.yml` waives under `skip_visual_proof`, since a sync merge's proof is bound to the PR head.
+VISUAL_PROOF_JOB = "visual-proof"
 # The commit status that records a commit's pre-release checks, posted ahead of a release.
 SMOKE_CONTEXT = "headless-smoke"
 # The published addons that embed ForeverCore under Libs/ForeverCore (`forever_tools.fleet`, which each consumer's own
@@ -95,6 +97,7 @@ class Decision:
     commit: str | None = None
     reason: str = ""
     failed: bool = False
+    skip_visual_proof: bool = False
 
     @property
     def release(self) -> bool:
@@ -304,6 +307,36 @@ def ci_runs(repo: str, sha: str) -> dict:
     return api_json(f"repos/{OWNER}/{repo}/actions/workflows/{CI_WORKFLOW}/runs?head_sha={sha}&event=push&per_page=100")
 
 
+def ci_jobs(repo: str, run_id: int) -> dict:
+    """The jobs of one `ci.yml` run, which say whether only the visual-proof job failed."""
+    return api_json(f"repos/{OWNER}/{repo}/actions/runs/{run_id}/jobs?per_page=100")
+
+
+def only_visual_proof_failed(repo: str, runs: dict, sha: str) -> bool:
+    """Whether `sha`'s newest main CI run failed only on `VISUAL_PROOF_JOB`, the failure `release.yml` waives."""
+    matching = [
+        run for run in runs.get("workflow_runs", []) if run.get("head_branch") == "main" and run.get("head_sha") == sha
+    ]
+    if not matching:
+        return False
+    newest = max(matching, key=lambda run: run.get("run_started_at") or "")
+    if newest.get("conclusion") != "failure":
+        return False
+    run_id = newest.get("id")
+    if not isinstance(run_id, int):
+        return False
+    try:
+        jobs = ci_jobs(repo, run_id).get("jobs")
+    except (AttributeError, json.JSONDecodeError, KeyError, TypeError):
+        return False
+    if not isinstance(jobs, list):
+        return False
+    if any(not isinstance(job, dict) or job.get("status") != "completed" for job in jobs):
+        return False
+    failed = release_check.failed_jobs(jobs)
+    return bool(failed) and all(name == VISUAL_PROOF_JOB for name in failed)
+
+
 def smoke_status(repo: str, sha: str) -> str:
     """The state of the newest `headless-smoke` status on `sha`, or `missing` before any smoke has posted one.
 
@@ -384,13 +417,19 @@ def plan(repo: str) -> Decision:
         return decide(changelog, head, False, False, "none", release_failed=True)
     if tag_exists(repo, f"v{version}"):
         return decide(changelog, None, True, False, "none")
-    state = ci_state(ci_runs(repo, head), head)
+    ci = ci_runs(repo, head)
+    state = ci_state(ci, head)
+    skip_visual_proof = state == "completed/failure" and only_visual_proof_failed(repo, ci, head)
+    if skip_visual_proof:
+        state = "completed/success"
     smoke = build_evidence(repo, head) if state == "completed/success" else "missing"
-    return decide(changelog, head, False, False, state, smoke=smoke)
+    decision = decide(changelog, head, False, False, state, smoke=smoke)
+    return replace(decision, skip_visual_proof=True) if decision.release and skip_visual_proof else decision
 
 
-def dispatch(repo: str, version: str, commit: str) -> None:
+def dispatch(repo: str, version: str, commit: str, *, skip_visual_proof: bool = False) -> None:
     """Start the consumer's own release workflow for the marked entry, at the commit full CI passed."""
+    waiver_input = ["-f", "skip_visual_proof=true"] if skip_visual_proof else []
     try:
         gh(
             "workflow",
@@ -404,6 +443,7 @@ def dispatch(repo: str, version: str, commit: str) -> None:
             f"version={version}",
             "-f",
             f"commit={commit}",
+            *waiver_input,
         )
     except SyncError as error:
         if "403" in str(error):
@@ -468,7 +508,7 @@ def main() -> int:
                 if hold:
                     print(f"{repo}: waiting: {hold}")
                     continue
-            dispatch(repo, decision.version, decision.commit)
+            dispatch(repo, decision.version, decision.commit, skip_visual_proof=decision.skip_visual_proof)
         except DispatchForbidden:
             forbidden += 1
             print(f"::error::CONSUMER_SYNC_TOKEN lacks Actions: Read and write on {OWNER}/{repo}")
