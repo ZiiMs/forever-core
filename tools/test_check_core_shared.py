@@ -80,6 +80,25 @@ class CheckCoreSharedTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("tools/lint_client_calls.py: tools/typecheck.sh never runs it", out)
 
+    def test_glyph_check_must_be_invoked(self):
+        self.write("tools/typecheck.sh", b"python3 tools/lint_client_calls.py\n# python3 tools/check_font_glyphs.py\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 1)
+        self.assertIn("tools/check_font_glyphs.py: tools/typecheck.sh never runs it", out)
+
+    def test_ledger_glyph_check_can_skip_an_empty_manifest(self):
+        gate = (
+            "python3 tools/lint_client_calls.py\n"
+            "has_font_producers=$(python3 - <<'PY'\n"
+            "print('no')\n"
+            "PY\n"
+            ")\n"
+            "if [[ $has_font_producers == yes ]]; then\n"
+            "    python3 tools/check_font_glyphs.py\n"
+            "fi\n"
+        )
+        self.assertEqual(check_core_shared.check_gate_invocations("ledger-forever", gate), [])
+
     def test_base_checks_gate_changes_without_vendored_changes(self):
         self.write("tools/typecheck.sh", b"true\n")
         self.commit("remove invocations")
