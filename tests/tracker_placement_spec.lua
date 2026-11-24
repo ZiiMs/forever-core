@@ -316,10 +316,20 @@ euiLocked.check(
 )
 euiList.height = 240
 Settle(euiLocked)
--- The unfold is deliberately not asserted: a locked column that leaves the under position has no way back (pre-existing
--- and generic -- it reproduces with the game's tracker and Questie too), so it is tracked separately rather than pinned
--- here as if it were intended.
-euiLocked.check(euiLocked.host.point[4] ~= nil, "the unfold leaves the column placed, not lost")
+-- The way back down is the whole point: a fold that rises but cannot fall leaves the column beside the list with no
+-- way home, which is what a single fold and unfold used to do.
+euiLocked.check(
+	euiLocked.host.point[1] == "TOPLEFT"
+		and euiLocked.host.point[3] == "BOTTOMLEFT"
+		and euiLocked.host.point[5] == euiList.top - euiList.height,
+	"and goes back under it when the list unfolds"
+)
+euiList.height = 120
+Settle(euiLocked)
+euiLocked.check(
+	euiLocked.host.point[1] == "TOPLEFT" and euiLocked.host.point[5] == euiList.top - euiList.height,
+	"a second fold still rises under the list, not beside it"
+)
 -- #851's in-game check: a locked column placed under the list as it loaded after a reload sat over the list once the
 -- list grew in under it. A list that leaves the column no room under it puts it left, Lock on or off.
 local longList = harness.new({ hostSettings = { attached = true, placement = "under", locked = true } })

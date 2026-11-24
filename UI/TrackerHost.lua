@@ -1104,8 +1104,15 @@ end
 -- This column never listens to another addon's frame, so it samples the rect itself, from a frame of its own, and lays
 -- out only when the sample differs -- the same shape as reading a tracker nobody hands events for.
 local SAMPLE_INTERVAL = 0.25
----@type number?, number?, number[]?
-local ellesmereSince, ellesmereRectScale, ellesmereRectHostScale, ellesmereLast
+---@type number?
+local ellesmereSince
+---@type number?
+local ellesmereRectScale
+---@type number?
+local ellesmereRectHostScale
+-- The last sample: left, top, right, bottom, scale and shown, in that order, or nil before the first one.
+---@type (number|boolean|nil)[]?
+local ellesmereLast
 ---@type table?
 local ellesmereRect
 ---@type Frame?
@@ -1618,16 +1625,21 @@ local function FollowTracker(settings, allowLayout)
 			local x = host:GetLeft() or 0
 			local heldTop = host:GetTop() or 0
 			-- EllesmereUI resizes its list in place on its own timer, so a fold and an unfold both move the last line
-			-- the column is under. A locked column that only ever moved down would hang below a folded list until the
-			-- player unlocked and re-placed it, so here it follows the line both ways. The game's tracker and
-			-- Questie keep the one-way rule: a list shrinking under them never drags the column up.
-			local top = MinimapTop(x, width, (shows == "ellesmere" and line) or heldTop)
+			-- the column is under. Here it follows that line both ways. The rise is what a locked column needs on a
+			-- fold, or it hangs below where the folded list ends; the fall matters just as much, because taking the
+			-- side fallback on the way down strands the column beside the list with no way home. The game's tracker
+			-- and Questie keep the one-way rule: a list shrinking under them never drags the column up.
+			local follows = shows == "ellesmere"
+			local top = MinimapTop(x, width, follows and (line or heldTop) or heldTop)
 			local floor = BarRoom(x, width, top, height)
-			if
-				height > (line or math.huge) - floor
-				or height > top - floor
-				or CoversList(EllesmereList() or QuestieList())
-			then
+			local covered = CoversList(EllesmereList() or QuestieList())
+			-- Following the line down lands the column where the taller list now is. It belongs under that line, not
+			-- beside it, and it fits there, so this is not Under's no-room fallback.
+			if covered and follows and height <= top - floor then
+				SetColumnPoint("TOPLEFT", "BOTTOMLEFT", x, top)
+				return
+			end
+			if height > (line or math.huge) - floor or height > top - floor or covered then
 				if PinSide(width, height) then
 					return
 				end
