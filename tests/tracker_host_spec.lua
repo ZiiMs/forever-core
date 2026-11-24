@@ -332,9 +332,17 @@ for line in io.lines("ForeverCore.toc") do
 	local path = line:match("^([%w_\\/]+%.lua)%s*$")
 	if path then
 		path = path:gsub("\\", "/")
-		local number = 0
+		-- The file's lines, so a mention can be judged with the lines that follow it.
+		local sources = {}
 		for source in io.lines(path) do
-			number = number + 1
+			sources[#sources + 1] = source
+		end
+		-- The frame named on one line is often called through a local on the next: `local f = rawget(_G, "...")`
+		-- then `f:HookScript(...)`. Joining the rest of this line with the next two catches that without pretending a
+		-- text scan can follow a name through the whole file; the harness's tracker frame refuses the two methods at
+		-- run time, which is what actually stops an alias a scan cannot read.
+		local WINDOW = 2
+		for number, source in ipairs(sources) do
 			local code = source:gsub("%-%-.*$", "")
 			for _, frame in ipairs(TRACKER_FRAMES) do
 				local init = 1
@@ -344,12 +352,17 @@ for line in io.lines("ForeverCore.toc") do
 						break
 					end
 					local after = code:sub(finish + 1)
-					-- A hook leaves something on another addon's frame for the session, so it is rejected wherever it
-					-- appears in the statement that named the frame: `probe:HookScript(...)` on the next line counts
-					-- just as much as a write on this one.
+					local ahead = { after }
+					for offset = 1, WINDOW do
+						local following = sources[number + offset]
+						if following then
+							ahead[#ahead + 1] = following:gsub("%-%-.*$", "")
+						end
+					end
+					local reached = table.concat(ahead, "\n")
 					local hooked = false
 					for _, hook in ipairs(HOOKS) do
-						if after:find(hook, 1, true) then
+						if reached:find(hook, 1, true) then
 							hooked = true
 						end
 					end

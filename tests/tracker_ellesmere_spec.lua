@@ -74,6 +74,28 @@ scaled.check(
 	"a rescaled list that hides drops its corner and the game's tracker is read again"
 )
 
+-- The cached rect is stored in the host's units, so the host's scale is part of what it means. Changing the column's
+-- own scale while the list is hidden leaves the numbers in the old units, so they are dropped too, not reused: the
+-- source falls back to the game's tracker instead of a corner measured at the old scale.
+local rescaledHost = harness.new({ hostSettings = { attached = true, placement = "under" } })
+local rescaledList = rescaledHost.env.CreateFrame("Frame", "EUI_CustomQuestTracker", rescaledHost.parent)
+rescaledList.left, rescaledList.top, rescaledList.height = 900, 860, 200
+rescaledHost.showTracker(false)
+rescaledHost.env.EUI_CustomQuestTracker = rescaledList
+rescaledHost.tickDelayed()
+rescaledHost.check(UnderList(rescaledHost, rescaledList), "the column follows the list before any rescale")
+rescaledHost.check(
+	rescaledHost.ns.TrackerHost.Debug():find("list=ellesmere", 1, true) ~= nil,
+	"and names it as the source"
+)
+rescaledList.shown = false
+rescaledHost.host.scale = 2
+rescaledHost.tickDelayed()
+rescaledHost.check(
+	rescaledHost.ns.TrackerHost.Debug():find("list=ellesmere", 1, true) == nil,
+	"a column rescale while the list is hidden drops its corner instead of reusing it in the old units"
+)
+
 -- EllesmereUI hides its list in arenas, in raids and on an empty log, all with the native frame still shown behind it:
 -- the column holds the corner it last saw instead of dropping onto quests the player cannot see.
 list.shown = false

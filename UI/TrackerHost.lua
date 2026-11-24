@@ -1090,10 +1090,14 @@ end
 -- frame's name, as it does Questie's. The frame exists only while that option is on (EllesmereUIQuestTracker builds it
 -- from InitCustom), so its presence is the choice, and the choice is latched until a reload. Reads only.
 --
--- Where that list is, in the host's units, remembered while EllesmereUI's own rules hide it: arenas, raids, an empty
--- log and mouseover mode all take the frame off screen. The muted native tracker behind it is still shown and still
--- holds the game's raw quests, so following that would put the column under quests the player cannot see. A frame that
--- is gone is not hiding but turned off, and the column reads the game's tracker as it always did. Reads only.
+-- Where that list is, in the host's units, remembered while EllesmereUI's own rules hide it: arenas, raids and an empty
+-- log take the frame off screen. The muted native tracker behind it is still shown and still holds the game's raw
+-- quests, so following that would put the column under quests the player cannot see. A frame that is gone is not hiding
+-- but turned off, and the column reads the game's tracker as it always did. Reads only.
+--
+-- Mouseover mode is not covered: EllesmereUI keeps the frame shown and sets its alpha to 0, so IsShown() still answers
+-- true and the column follows a list the player cannot see. Left as it is here rather than guessed at with an alpha
+-- test, which would also catch a frame fading in.
 --
 -- EllesmereUI renders its list on its own zero-delay timer, so a quest arriving, a filter changing and the list folding
 -- all resize or hide the frame after QUEST_LOG_UPDATE has already returned: there is no client event for any of it.
@@ -1101,7 +1105,7 @@ end
 -- out only when the sample differs -- the same shape as reading a tracker nobody hands events for.
 local SAMPLE_INTERVAL = 0.25
 ---@type number?, number?, number[]?
-local ellesmereSince, ellesmereRectScale, ellesmereLast
+local ellesmereSince, ellesmereRectScale, ellesmereRectHostScale, ellesmereLast
 ---@type table?
 local ellesmereRect
 ---@type Frame?
@@ -1114,16 +1118,18 @@ local function EllesmereFrame()
 		return list
 	end
 end
--- Its rect in the host's units, and the scale it was taken at. A scale change makes the cached rect wrong, so it is
--- dropped rather than converted: a list hidden before then says nothing about the room, and the game's tracker is read
--- again, which is what the column did before EllesmereUI was a list source.
+-- Its rect in the host's units, and the scale pair it was taken at. The rect is divided by the host's scale, so both
+-- the list's scale and the host's are part of what it means: a change to either makes the cached numbers wrong, and it
+-- is dropped rather than converted. A list hidden before then says nothing about the room, and the game's tracker is
+-- read again, which is what the column did before EllesmereUI was a list source.
 ---@param list Frame
 ---@return number? left, number? top, number? right, number? bottom
 local function EllesmereRect(list)
 	local scale = list:GetEffectiveScale()
+	local hostScale = host:GetEffectiveScale()
 	if not list:IsShown() then
-		if not ellesmereRect or scale ~= ellesmereRectScale then
-			ellesmereRect, ellesmereRectScale = nil, nil
+		if not ellesmereRect or scale ~= ellesmereRectScale or hostScale ~= ellesmereRectHostScale then
+			ellesmereRect, ellesmereRectScale, ellesmereRectHostScale = nil, nil, nil
 			return nil
 		end
 		return ellesmereRect[1], ellesmereRect[2], ellesmereRect[3], ellesmereRect[4]
@@ -1133,9 +1139,9 @@ local function EllesmereRect(list)
 	if not (left and top and bottom) then
 		return nil
 	end
-	local toHost = scale / host:GetEffectiveScale()
+	local toHost = scale / hostScale
 	ellesmereRect = { left * toHost, top * toHost, right and right * toHost, bottom * toHost }
-	ellesmereRectScale = scale
+	ellesmereRectScale, ellesmereRectHostScale = scale, hostScale
 	return ellesmereRect[1], ellesmereRect[2], ellesmereRect[3], ellesmereRect[4]
 end
 -- One sample: the six reads the placement itself uses, compared with the last one, so a layout runs only when the list
@@ -1170,7 +1176,7 @@ local function SampleEllesmere()
 end
 
 local function WatchEllesmere()
-	if ellesmereWatcher then
+	if ellesmereWatcher or not EllesmereFrame() then
 		return
 	end
 	ellesmereSince = 0
@@ -1383,7 +1389,7 @@ local function UnderX(x, width, right)
 	return math.max(0, math.min(x, right - width))
 end
 
----@param shows "questie"|"hidden"|"collapsed"|"list"
+---@param shows "ellesmere"|"questie"|"hidden"|"collapsed"|"list"
 ---@param width number
 ---@param height number
 ---@return number? x, number? top, number? floor
@@ -1509,9 +1515,13 @@ end
 --
 -- One exception, and only for EllesmereUI's list: its custom tracker resizes in place on its own timer, so folding a
 -- quest or a zone moves the last line the column is under with nothing else on screen changing. A locked column that
--- refused to move would then hang below where the list ends, and the player would have to unlock and re-place it. The
--- game's tracker and Questie keep the one-way rule below -- never up -- so a list that shrinks under them cannot drag
--- the column around; only a line that drops takes a locked column with it.
+-- refused to rise would hang below where the folded list ends, and the player would have to unlock and re-place it.
+-- The game's tracker and Questie keep the one-way rule below -- never up -- so a list that shrinks under them cannot
+-- drag the column around.
+--
+-- Only the rise is handled here. Unfolding pushes the line back down past the held top, and the column takes Under's
+-- no-room fallback to the side instead of following it down; a locked column has no way back from the pin, which is a
+-- separate fault in the generic fallback and not something this branch changes.
 local function LockedUnderPosition(shows, width, height)
 	local x = host:GetLeft() or 0
 	local heldTop = host:GetTop() or 0
