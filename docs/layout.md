@@ -36,7 +36,7 @@ Every runtime file and tool in ForeverCore, with what it owns. `AGENTS.md` holds
   `forever-credits` markers in README.md's `## Credits` and in `docs/curseforge.md`.
 - `UI/TrackerHost.lua`: the private tracker column, one frame on `UIParent` the player drags and locks, its optional
   tooltip-art backdrop and opacity, its layout and combat handling, the one-time move of an old attached or beside
-  placement to the pin, and the one-time migration from a consumer's old tracker settings. The column is anchored
+  placement to the pin, and the one-time migration from a consumer's old tracker settings. Its sections' text keeps core's own fallback fonts (12 px lines, 14 px headers, with a shadow) while a tracker replacement shrinks the shared ones. The column is anchored
   only to `UIParent`, at coordinates read from the quest tracker on screen (`ObjectiveTrackerFrame`, or the list
   another addon draws in its place: Questie's `Questie_BaseFrame` while shown, or EllesmereUI's
   `EUI_CustomQuestTracker` while its Custom Quest Tracker is on, read first and remembered while EllesmereUI's own

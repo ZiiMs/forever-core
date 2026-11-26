@@ -1,11 +1,26 @@
 ---@type string, ForeverTrackerNamespace
 local _, ns = ...
 
+---@class ForeverTrackerHeaderFrame : Frame
+---@field Text? FontString
+
+---@class ForeverTrackerLineFrame : Frame
+---@field Text? FontString
+---@field Dash? FontString
+
+---@class ForeverTrackerBlockFrame : Frame
+---@field HeaderText? FontString
+---@field usedLines? table<any, ForeverTrackerLineFrame>
+
 ---@class ForeverTrackerModule : Frame
 ---@field uiOrder? number
 ---@field parentContainer? Frame
----@field Header? Frame
+---@field Header? ForeverTrackerHeaderFrame
+---@field usedBlocks? table<string, table<any, ForeverTrackerBlockFrame>> Blizzard's module model keeps its blocks here
 ---@field headerMenu? boolean
+---@field trackerBuiltWidth? number the width the section's blocks were last built at
+---@field SetTrackerContentsWidth fun(self: ForeverTrackerModule): number the contents width at the column's
+---@field IsDirty? fun(self: ForeverTrackerModule): boolean whether the section's own data changed since its last build
 ---@field show? ForeverTrackerShowSetting the section's own show switch, when it has one
 ---@field GetContextMenuParent fun(self: ForeverTrackerModule): Frame
 ---@field SetContainer fun(self: ForeverTrackerModule, container: Frame)
@@ -305,10 +320,87 @@ local modules, queued = {}, false
 local pendingAttachments = {}
 local pools
 
+-- Edit Mode sizes the shared tracker fonts, and a tracker replacement can shrink them and their stock sources to 1 px
+-- (EllesmereUI does, and strips their shadow), so every section's text turned unreadable at once (#1099). The text
+-- core builds keeps its own fallback fonts at the game's minimum sizes, in the chat font's locale-aware face with a
+-- shadow, and follows the shared font again once that is readable. The game's own tracker is never touched.
+local LINE_FONT, LINE_FALLBACK, LINE_MINIMUM = "ObjectiveTrackerLineFont", "ForeverCoreTrackerLineFont", 12
+local HEADER_FONT, HEADER_FALLBACK, HEADER_MINIMUM = "ObjectiveTrackerHeaderFont", "ForeverCoreTrackerHeaderFont", 14
+
+---@type table<FontString, boolean>
+local usingFallback = setmetatable({}, { __mode = "k" })
+
+---@param text FontString?
+---@param shared string the font object the game gives this text
+---@param fallback string core's fallback font name
+---@param minimum number
+---@return boolean changed whether the text's size may have moved
+local function ReadableFont(text, shared, fallback, minimum)
+	if not text or not text.GetFont then
+		return false
+	end
+	if usingFallback[text] then
+		local face = rawget(_G, shared) --[[@as Font?]]
+		local size = face and select(2, face:GetFont())
+		if type(size) ~= "number" or size < minimum then
+			return false
+		end
+		text:SetFontObject(shared)
+		usingFallback[text] = nil
+		return true
+	end
+	local size = select(2, text:GetFont())
+	if type(size) ~= "number" or size >= minimum then
+		return false
+	end
+	if not rawget(_G, fallback) then
+		local file, _, flags = ChatFontNormal:GetFont()
+		local font = CreateFont(fallback)
+		font:SetFont(file, minimum, flags)
+		font:SetShadowColor(0, 0, 0, 1)
+		font:SetShadowOffset(1, -1)
+	end
+	text:SetFontObject(fallback)
+	-- The fallback carries no alignment: the shared object gives text its left and top edge.
+	text:SetJustifyH("LEFT")
+	text:SetJustifyV("TOP")
+	usingFallback[text] = true
+	return true
+end
+
+---@param block ForeverTrackerBlockFrame
+---@return boolean changed
+local function ReadableBlockFonts(block)
+	local changed = ReadableFont(block.HeaderText, LINE_FONT, LINE_FALLBACK, LINE_MINIMUM)
+	for _, line in pairs(block.usedLines or {}) do
+		changed = ReadableFont(line.Text, LINE_FONT, LINE_FALLBACK, LINE_MINIMUM) or changed
+		changed = ReadableFont(line.Dash, LINE_FONT, LINE_FALLBACK, LINE_MINIMUM) or changed
+	end
+	return changed
+end
+
+-- Settles every font of a section's header and kept blocks, and marks the section dirty when one moved, so it builds
+-- again at the new size.
+---@param module ForeverTrackerModule
+---@return boolean changed
+local function SettleFonts(module)
+	local changed = ReadableFont(module.Header and module.Header.Text, HEADER_FONT, HEADER_FALLBACK, HEADER_MINIMUM)
+	for _, blocks in pairs(module.usedBlocks or {}) do
+		for _, block in pairs(blocks) do
+			changed = ReadableBlockFonts(block) or changed
+		end
+	end
+	if changed and type(module.MarkDirty) == "function" then
+		module:MarkDirty()
+	end
+	return changed
+end
+
 local function Acquire(parent, template)
 	local info = C_XMLUtil.GetTemplateInfo(template)
 	local pool = pools:GetOrCreatePool(info and info.type or "Frame", parent, template)
 	---@class ForeverTrackerPooledFrame : Frame
+	---@field HeaderText? FontString
 	---@field GetLine? function
 	---@field FreeLine? function
 	---@field OnAnimFinished? function
@@ -331,6 +423,8 @@ local function GetLine(block, key, template)
 	end
 	block.usedLines[key] = line
 	line.objectiveKey, line.parentBlock, line.used = key, block, true
+	ReadableFont(line.Text, LINE_FONT, LINE_FALLBACK, LINE_MINIMUM)
+	ReadableFont(line.Dash, LINE_FONT, LINE_FALLBACK, LINE_MINIMUM)
 	return line
 end
 
@@ -401,6 +495,7 @@ end
 function Module:AcquireFrame(template)
 	local frame, isNew = Acquire(self, template)
 	frame:SetParent(self.ContentsFrame)
+	ReadableFont(frame.HeaderText, LINE_FONT, LINE_FALLBACK, LINE_MINIMUM)
 	if frame.GetLine then
 		frame.GetLine, frame.FreeLine = GetLine, FreeLine
 		if frame.OnAnimFinished then
@@ -878,11 +973,15 @@ end
 -- every other section's blocks and header alone (#795). A section with no room keeps its blocks and stays dirty until
 -- it has some, since Blizzard's Update with no room would free them. A frame without IsDirty cannot say what changed,
 -- so it rebuilds on every pass.
+---@param self ForeverTrackerModule
 function Module:Update(availableHeight, dirtyUpdate)
 	self.trackerCap = availableHeight
 	if type(self.baseUpdate) ~= "function" then
 		return
 	end
+	-- Blocks kept from an earlier pass are measured as they are, so their fonts settle before the build, and a change
+	-- builds them again.
+	SettleFonts(self)
 	if not self.trackerScrollable then
 		return self.baseUpdate(self, availableHeight, dirtyUpdate)
 	end
@@ -2317,6 +2416,13 @@ local function Listen()
 			quiet = quiet + 1
 		end
 
+		-- A tracker replacement can shrink the shared fonts after the first layout: that needs a layout whatever the
+		-- placement does, since a manually placed column never lays out for a placement alone.
+		for _, module in ipairs(modules) do
+			if SettleFonts(module) then
+				needsLayout, needsPlacement = true, true
+			end
+		end
 		if needsPlacement and (frames >= 2 or elapsed >= 1) and not ObjectiveTrackerFrame.isDragging then
 			if not queued then
 				if needsLayout then
